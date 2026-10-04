@@ -1,0 +1,14 @@
+user frigate
+topic readwrite frigate/#
+
+user rpconnect
+topic read frigate/available
+topic read frigate/restart
+topic read frigate/events
+topic read frigate/tracked_object_update
+topic read frigate/reviews
+topic read frigate/triggers
+topic read frigate/stats
+topic read frigate/camera_activity
+topic read frigate/profile/+
+topic read frigate/notifications/+

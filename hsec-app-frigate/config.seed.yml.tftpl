@@ -1,0 +1,60 @@
+mqtt:
+  enabled: true
+  host: mosquitto.${namespace}.svc.cluster.local
+  port: 1883
+  user: "{FRIGATE_MQTT_USER}"
+  password: "{FRIGATE_MQTT_PASSWORD}"
+  qos: 1
+
+detectors:
+  ov:
+    type: openvino
+    device: GPU
+
+model:
+  width: 300
+  height: 300
+  input_tensor: nhwc
+  input_pixel_format: bgr
+  path: /openvino-model/ssdlite_mobilenet_v2.xml
+  labelmap_path: /openvino-model/coco_91cl_bkgr.txt
+
+ffmpeg:
+  hwaccel_args: preset-vaapi
+
+face_recognition:
+  enabled: true
+  model_size: small
+
+record:
+  enabled: true
+  continuous:
+    days: 0
+  motion:
+    days: 0
+  alerts:
+    retain:
+      days: 14
+  detections:
+    retain:
+      days: 14
+
+snapshots:
+  enabled: true
+  retain:
+    default: 30
+
+cameras:
+%{ for name, cam in cameras ~}
+  ${name}:
+    ffmpeg:
+      inputs:
+        - path: ${cam.record_url}
+          roles: [record]
+        - path: ${cam.detect_url}
+          roles: [detect]
+    detect:
+      width: ${cam.detect_width}
+      height: ${cam.detect_height}
+      fps: 5
+%{ endfor ~}

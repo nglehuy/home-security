@@ -1,0 +1,88 @@
+# Posts each alert message from hsec.alerts to Discord.
+# Message 1 (kind start) carries the snapshot image. Each clip part (kind clip)
+# carries one MP4 file, or a Frigate link when the part was too big.
+input:
+  redpanda:
+    seed_brokers: [ "redpanda-0.redpanda.${NAMESPACE:hsec}.svc.cluster.local:9093" ]
+    topics: [ hsec.alerts ]
+    consumer_group: hsec-discord-notifier
+    # The input keeps one batch per partition in flight. A 1-byte limit makes
+    # each batch hold one message. The switch output sends the messages of a
+    # batch to its cases in parallel, so a bigger batch lets a clip part
+    # overtake its image.
+    max_yield_batch_bytes: 1
+
+pipeline:
+  processors:
+    - label: to_discord
+      mutation: |
+        let when = this.review_start.ts_format("2006-01-02 15:04:05", env("TZ"))
+        let text = if this.kind == "start" {
+          "Alert on %v at %v: %v. Zones: %v.".format(this.camera, $when, this.objects.join(", "), this.zones.join(", "))
+        } else if this.clip_mp4 != null {
+          "Clip %v of %v for the alert on %v at %v.".format(this.part, this.part_count, this.camera, $when)
+        } else {
+          "Clip %v of %v for the alert on %v at %v is not attached. Frigate link: %v".format(this.part, this.part_count, this.camera, $when, this.clip_url)
+        }
+        meta payload_json = { "username": "Home security", "content": $text }.format_json().string()
+        meta media_case = if this.image_jpeg.or(null) != null { "image" } else if this.clip_mp4.or(null) != null { "clip" } else { "none" }
+
+# Each case sends one message at a time.
+output:
+  switch:
+    cases:
+      - check: '@media_case == "image"'
+        output:
+          http_client:
+            url: ${DISCORD_WEBHOOK_URL}
+            verb: POST
+            rate_limit: discord
+            max_in_flight: 1
+            retries: 3
+            backoff_on: [ 429 ]
+            drop_on: [ 400 ]
+            multipart:
+              - content_type: application/json
+                content_disposition: 'form-data; name="payload_json"'
+                body: '${! @payload_json }'
+              - content_type: image/jpeg
+                content_disposition: 'form-data; name="files[0]"; filename="alert.jpg"'
+                body: '${! this.image_jpeg.decode("base64") }'
+      - check: '@media_case == "clip"'
+        output:
+          http_client:
+            url: ${DISCORD_WEBHOOK_URL}
+            verb: POST
+            rate_limit: discord
+            max_in_flight: 1
+            retries: 3
+            backoff_on: [ 429 ]
+            drop_on: [ 400 ]
+            multipart:
+              - content_type: application/json
+                content_disposition: 'form-data; name="payload_json"'
+                body: '${! @payload_json }'
+              - content_type: video/mp4
+                content_disposition: 'form-data; name="files[0]"; filename="alert.mp4"'
+                body: '${! this.clip_mp4.decode("base64") }'
+      - check: '@media_case == "none"'
+        output:
+          http_client:
+            url: ${DISCORD_WEBHOOK_URL}
+            verb: POST
+            rate_limit: discord
+            max_in_flight: 1
+            retries: 3
+            backoff_on: [ 429 ]
+            drop_on: [ 400 ]
+            multipart:
+              - content_type: application/json
+                content_disposition: 'form-data; name="payload_json"'
+                body: '${! @payload_json }'
+
+# Discord allows about 30 webhook requests per minute.
+rate_limit_resources:
+  - label: discord
+    local:
+      count: 1
+      interval: 2s

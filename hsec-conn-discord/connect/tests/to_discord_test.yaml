@@ -1,0 +1,49 @@
+# Unit tests for the to_discord processor of the notifier.
+# Run from hsec-conn-discord:
+# redpanda-connect test --env-file connect/tests/test.env ./connect/tests/...
+# 1718987129.308396 is 2024-06-22 00:25:29 in Asia/Singapore.
+tests:
+  - name: start with an image sends the image and the alert text
+    target_processors: '../alerts-to-discord.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"alert_id":"r1:start","kind":"start","review_id":"r1","camera":"front_cam","severity":"alert","objects":["person","car"],"sub_labels":[],"zones":["front_yard"],"review_start":1718987129.308396,"event_id":"e1","image_jpeg":"/9j/4AAQ"}'
+    output_batches:
+      - - metadata_equals:
+            media_case: image
+          bloblang: '@payload_json.parse_json() == {"username": "Home security", "content": "Alert on front_cam at 2024-06-22 00:25:29: person, car. Zones: front_yard."}'
+
+  - name: start without an image sends only the text
+    target_processors: '../alerts-to-discord.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"alert_id":"r1:start","kind":"start","camera":"front_cam","objects":["person"],"zones":["porch"],"review_start":1718987129.308396,"image_jpeg":null}'
+    output_batches:
+      - - metadata_equals:
+            media_case: none
+          bloblang: '@payload_json.parse_json().content.has_prefix("Alert on front_cam at ")'
+
+  - name: clip with a file sends the clip and its part number
+    target_processors: '../alerts-to-discord.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"alert_id":"r1:clip:2","kind":"clip","camera":"front_cam","review_start":1718987129.308396,"part":2,"part_count":3,"clip_url":"https://192.168.1.17:8971/api/front_cam/start/1/end/2/clip.mp4","clip_mp4":"AAAAIGZ0eXA="}'
+    output_batches:
+      - - metadata_equals:
+            media_case: clip
+          bloblang: '@payload_json.parse_json().content == "Clip 2 of 3 for the alert on front_cam at 2024-06-22 00:25:29."'
+
+  - name: clip without a file sends the Frigate link
+    target_processors: '../alerts-to-discord.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"alert_id":"r1:clip:3","kind":"clip","camera":"front_cam","review_start":1718987129.308396,"part":3,"part_count":3,"clip_url":"https://192.168.1.17:8971/api/front_cam/start/1/end/2/clip.mp4","clip_mp4":null}'
+    output_batches:
+      - - metadata_equals:
+            media_case: none
+          bloblang: '@payload_json.parse_json().content == "Clip 3 of 3 for the alert on front_cam at 2024-06-22 00:25:29 is not attached. Frigate link: https://192.168.1.17:8971/api/front_cam/start/1/end/2/clip.mp4"'
+
+  - name: start with an empty zone list does not fail
+    target_processors: '../alerts-to-discord.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"alert_id":"r2:start","kind":"start","camera":"garage","objects":["car"],"zones":[],"review_start":1718987129.308396,"image_jpeg":"/9j/4AAQ"}'
+    output_batches:
+      - - metadata_equals:
+            media_case: image
+          bloblang: '!errored() && @payload_json.parse_json().content == "Alert on garage at 2024-06-22 00:25:29: car. Zones: ."'

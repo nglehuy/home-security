@@ -1,0 +1,160 @@
+# Unit tests for the route processor of the bridge.
+# Run from hsec-conn-mqtt: redpanda-connect test ./connect/tests/...
+tests:
+  - name: event goes to frigate.events with the object ID as key
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"type":"new","before":{},"after":{"id":"1607123955.475377-mxklsc","camera":"front_door","label":"person","start_time":1607123955.475377,"end_time":null,"frame_time":1607123961.837752}}'
+        metadata:
+          mqtt_topic: frigate/events
+    output_batches:
+      - - content_equals: '{"type":"new","before":{},"after":{"id":"1607123955.475377-mxklsc","camera":"front_door","label":"person","start_time":1607123955.475377,"end_time":null,"frame_time":1607123961.837752}}'
+          metadata_equals:
+            kafka_topic: frigate.events
+            kafka_key: 1607123955.475377-mxklsc
+            video_camera: front_door
+            video_from: "1607123955.475377"
+            video_to: "1607123961.837752"
+
+  - name: ended event uses the end time
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"type":"end","after":{"id":"e1","camera":"garage","start_time":1700000000,"end_time":1700000042.5,"frame_time":1700000040}}'
+        metadata:
+          mqtt_topic: frigate/events
+    output_batches:
+      - - metadata_equals:
+            kafka_topic: frigate.events
+            video_from: "1700000000.000000"
+            video_to: "1700000042.500000"
+
+  - name: review goes to frigate.reviews with the review ID as key
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"type":"new","before":{},"after":{"id":"1718987129.308396-fqk5ka","camera":"front_cam","start_time":1718987129.308396,"end_time":null,"severity":"alert","data":{"detections":["1718987128.947436-g92ztx"],"objects":["person"],"sub_labels":[],"zones":[]}}}'
+        metadata:
+          mqtt_topic: frigate/reviews
+    output_batches:
+      - - metadata_equals:
+            kafka_topic: frigate.reviews
+            kafka_key: 1718987129.308396-fqk5ka
+            video_camera: front_cam
+            video_from: "1718987129.308396"
+            video_to: "1718987129.308396"
+
+  - name: face update goes to frigate.tracked_object_update with the object ID as key
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"type":"face","id":"1607123955.475377-mxklsc","name":"John","score":0.95,"camera":"front_door_cam","timestamp":1607123958.748393}'
+        metadata:
+          mqtt_topic: frigate/tracked_object_update
+    output_batches:
+      - - metadata_equals:
+            kafka_topic: frigate.tracked_object_update
+            kafka_key: 1607123955.475377-mxklsc
+            video_camera: front_door_cam
+            video_from: "1607123958.748393"
+            video_to: "1607123958.748393"
+
+  - name: description update without camera and time goes to hsec.rejected
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"type":"description","id":"1607123955.475377-mxklsc","description":"The car is a red sedan"}'
+        metadata:
+          mqtt_topic: frigate/tracked_object_update
+    output_batches:
+      - - content_equals: '{"type":"description","id":"1607123955.475377-mxklsc","description":"The car is a red sedan"}'
+          metadata_equals:
+            kafka_topic: hsec.rejected
+            kafka_key: ""
+            mqtt_topic: frigate/tracked_object_update
+          bloblang: '@.keys().filter(k -> k.has_prefix("video_")).length() == 0'
+
+  - name: camera message with camera and time but no ID gets an empty key
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"type":"classification","camera":"garage","timestamp":1700000001.25}'
+        metadata:
+          mqtt_topic: frigate/tracked_object_update
+    output_batches:
+      - - content_equals: '{"type":"classification","camera":"garage","timestamp":1700000001.25}'
+          metadata_equals:
+            kafka_topic: frigate.tracked_object_update
+            kafka_key: ""
+            video_camera: garage
+            video_from: "1700000001.250000"
+            video_to: "1700000001.250000"
+
+  - name: body that is not JSON goes to hsec.rejected unchanged
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: 'not json at all'
+        metadata:
+          mqtt_topic: frigate/events
+    output_batches:
+      - - content_equals: 'not json at all'
+          metadata_equals:
+            kafka_topic: hsec.rejected
+            kafka_key: ""
+          bloblang: '!errored() && @.keys().filter(k -> k.has_prefix("video_")).length() == 0'
+
+  - name: time that is not a number goes to hsec.rejected
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"type":"new","after":{"id":"e2","camera":"garage","start_time":"yesterday"}}'
+        metadata:
+          mqtt_topic: frigate/events
+    output_batches:
+      - - metadata_equals:
+            kafka_topic: hsec.rejected
+          bloblang: '!errored()'
+
+  - name: trigger uses the receive time for both video headers
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"name":"car_trigger","camera":"driveway","event_id":"1752857206.193062-xyz","type":"thumbnail","score":0.85}'
+        metadata:
+          mqtt_topic: frigate/triggers
+    output_batches:
+      - - metadata_equals:
+            kafka_topic: frigate.triggers
+            kafka_key: 1752857206.193062-xyz
+            video_camera: driveway
+          bloblang: '@video_from == @video_to && @video_from.number() > 1700000000 && @video_from.re_match("^[0-9]+\\.[0-9]{6}$")'
+
+  - name: system topic keeps its topic, gets an empty key, and no video headers
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: '{"cameras":{"front_door":{"camera_fps":5.0}},"service":{"uptime":120}}'
+        metadata:
+          mqtt_topic: frigate/stats
+    output_batches:
+      - - content_equals: '{"cameras":{"front_door":{"camera_fps":5.0}},"service":{"uptime":120}}'
+          metadata_equals:
+            kafka_topic: frigate.stats
+            kafka_key: ""
+          bloblang: '@.keys().filter(k -> k.has_prefix("video_")).length() == 0'
+
+  - name: plain text system topic stays unchanged
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: 'online'
+        metadata:
+          mqtt_topic: frigate/available
+    output_batches:
+      - - content_equals: 'online'
+          metadata_equals:
+            kafka_topic: frigate.available
+            kafka_key: ""
+          bloblang: '!errored() && @.keys().filter(k -> k.has_prefix("video_")).length() == 0'
+
+  - name: profile topic with two levels becomes a dotted topic
+    target_processors: '../frigate-to-redpanda.yaml#/pipeline/processors'
+    input_batch:
+      - content: 'away'
+        metadata:
+          mqtt_topic: frigate/profile/set
+    output_batches:
+      - - metadata_equals:
+            kafka_topic: frigate.profile.set
+            kafka_key: ""

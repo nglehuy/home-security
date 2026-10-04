@@ -1,0 +1,56 @@
+# Copies every general Frigate MQTT topic into Redpanda.
+# Camera messages get the video reference headers video_camera, video_from,
+# and video_to. System messages get no headers. A camera message without a
+# camera or a time goes to hsec.rejected.
+input:
+  mqtt:
+    urls: [ "tcp://mosquitto.${NAMESPACE:hsec}.svc.cluster.local:1883" ]
+    topics:
+      - frigate/available
+      - frigate/restart
+      - frigate/events
+      - frigate/tracked_object_update
+      - frigate/reviews
+      - frigate/triggers
+      - frigate/stats
+      - frigate/camera_activity
+      - frigate/profile/+
+      - frigate/notifications/+
+    client_id: rpconnect-frigate
+    user: ${MQTT_BRIDGE_USER}
+    password: ${MQTT_BRIDGE_PASSWORD}
+    qos: 1
+    clean_session: false
+
+pipeline:
+  threads: 1
+  processors:
+    - label: route
+      mapping: |
+        root = content()
+        let system = [ "frigate/available", "frigate/restart", "frigate/stats", "frigate/camera_activity", "frigate/profile/set", "frigate/profile/state", "frigate/notifications/set", "frigate/notifications/state" ].contains(@mqtt_topic)
+        let trigger = @mqtt_topic == "frigate/triggers"
+        # A mapping with root = content() keeps the body byte for byte. A
+        # mutation, or any use of "this", re-serializes the JSON and changes
+        # its key order. So the fields come from a parsed copy.
+        let doc = content().parse_json().catch({})
+        let now = timestamp_unix_milli() / 1000
+        let camera = $doc.after.camera.or($doc.camera).or("")
+        let from = if $trigger { $now } else { $doc.after.start_time.or($doc.timestamp).or(null) }
+        let to = if $trigger { $now } else { $doc.after.end_time.or($doc.after.frame_time).or($doc.after.start_time).or($doc.timestamp).or(null) }
+        let video = !$system && $camera.type() == "string" && $camera != "" && $from.type() == "number" && $to.type() == "number"
+        meta kafka_topic = if $system || $video { @mqtt_topic.replace_all("/", ".") } else { "hsec.rejected" }
+        meta kafka_key = if $video { $doc.after.id.or($doc.id).or($doc.event_id).or("").string() } else { "" }
+        meta video_camera = if $video { $camera } else { deleted() }
+        # Unix seconds with 6 decimals. string() would give 1.6e+09 style text.
+        meta video_from = if $video { "%.6f".format($from.float64()) } else { deleted() }
+        meta video_to = if $video { "%.6f".format($to.float64()) } else { deleted() }
+
+output:
+  redpanda:
+    seed_brokers: [ "redpanda-0.redpanda.${NAMESPACE:hsec}.svc.cluster.local:9093" ]
+    topic: ${! @kafka_topic }
+    key: ${! @kafka_key }
+    max_in_flight: 1
+    metadata:
+      include_patterns: [ "^video_", "^mqtt_topic$" ]

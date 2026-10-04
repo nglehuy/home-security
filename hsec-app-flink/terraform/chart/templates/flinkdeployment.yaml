@@ -1,0 +1,73 @@
+{{- $ns := .Release.Namespace -}}
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: hsec-stream
+  namespace: {{ $ns }}
+  labels:
+    {{- with .Values.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    app.kubernetes.io/name: hsec-stream
+spec:
+  image: {{ required "image is required" .Values.image | quote }}
+  flinkVersion: v2_2
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "1"
+    taskmanager.memory.managed.fraction: "0.05"
+    state.backend.type: hashmap
+    execution.checkpointing.interval: 60s
+    execution.checkpointing.mode: EXACTLY_ONCE
+    execution.checkpointing.num-retained: "3"
+    execution.checkpointing.dir: s3://hsec-flink/checkpoints
+    execution.checkpointing.savepoint-dir: s3://hsec-flink/savepoints
+    high-availability.type: kubernetes
+    high-availability.storageDir: s3://hsec-flink/ha
+    s3.endpoint: http://rustfs-svc.{{ $ns }}.svc.cluster.local:9000
+    s3.path.style.access: "true"
+    s3.access-key: {{ required "s3AccessKey is required" .Values.s3AccessKey | quote }}
+    s3.secret-key: {{ required "s3SecretKey is required" .Values.s3SecretKey | quote }}
+  podTemplate:
+    metadata:
+      labels:
+        {{- with .Values.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        app.kubernetes.io/name: hsec-stream
+    spec:
+      containers:
+        - name: flink-main-container
+          env:
+            - name: ENABLE_BUILT_IN_PLUGINS
+              value: flink-s3-fs-presto-2.2.1.jar
+          envFrom:
+            - secretRef:
+                name: {{ .Values.envSecret }}
+  jobManager:
+    resource:
+      memory: 768m
+      cpu: 0.25
+  taskManager:
+    resource:
+      memory: 1536m
+      cpu: 0.5
+  job:
+    jarURI: local:///opt/flink/usrlib/hsec-stream.jar
+    parallelism: 1
+    upgradeMode: last-state
+    args:
+      - --timezone
+      - {{ .Values.timezone | quote }}
+      - --frigate-url
+      - {{ required "frigateUrl is required" .Values.frigateUrl | quote }}
+      - --frigate-api
+      - http://frigate-api.{{ $ns }}.svc.cluster.local:5000
+      - --kafka-bootstrap
+      - redpanda-0.redpanda.{{ $ns }}.svc.cluster.local:9093
+      - --catalog-uri
+      - jdbc:postgresql://postgres.{{ $ns }}.svc.cluster.local:5432/iceberg_catalog
+      - --warehouse
+      - s3://hsec-lake/warehouse
+      - --s3-endpoint
+      - http://rustfs-svc.{{ $ns }}.svc.cluster.local:9000

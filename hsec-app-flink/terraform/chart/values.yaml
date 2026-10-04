@@ -1,0 +1,13 @@
+# Image of the job, for example <registry>/hsec-app-flink:<tag>.
+image: ""
+# Local time zone of the alert text.
+timezone: Asia/Singapore
+# Base URL of the Frigate UI, for links in alerts.
+frigateUrl: ""
+# Secret with POSTGRES_ICEBERG_PASSWORD, RUSTFS_ACCESS_KEY, and RUSTFS_SECRET_KEY.
+envSecret: flink-env
+# RustFS keys for checkpoints. The Presto S3 file system reads them only from
+# the Flink configuration. Terraform sets them from the Secret rustfs-root.
+s3AccessKey: ""
+s3SecretKey: ""
+labels: {}

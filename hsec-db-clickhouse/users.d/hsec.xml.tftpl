@@ -1,0 +1,58 @@
+<!-- Users. Terraform fills in the SHA-256 of each random password. -->
+<clickhouse>
+  <profiles>
+    <!-- readonly 2 allows query settings, which Grafana sends, but no writes. -->
+    <read_only>
+      <readonly>2</readonly>
+    </read_only>
+  </profiles>
+
+  <users>
+    <!-- Nobody uses default. It accepts only local connections. -->
+    <default>
+      <networks replace="replace">
+        <ip>::1</ip>
+        <ip>127.0.0.1</ip>
+      </networks>
+    </default>
+
+    <!-- Runs the migrations by hand. -->
+    <hsec_admin>
+      <password_sha256_hex>${admin_sha256}</password_sha256_hex>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <profile>default</profile>
+      <quota>default</quota>
+      <grants>
+        <query>GRANT ALL ON hsec.*</query>
+      </grants>
+    </hsec_admin>
+
+    <spark_writer>
+      <password_sha256_hex>${spark_sha256}</password_sha256_hex>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <profile>default</profile>
+      <quota>default</quota>
+      <grants>
+        <query>GRANT SELECT, INSERT ON hsec.*</query>
+        <!-- The ClickHouse Spark connector reads the cluster list before each write. -->
+        <query>GRANT SELECT ON system.clusters</query>
+      </grants>
+    </spark_writer>
+
+    <grafana_reader>
+      <password_sha256_hex>${grafana_sha256}</password_sha256_hex>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <profile>read_only</profile>
+      <quota>default</quota>
+      <grants>
+        <query>GRANT SELECT ON hsec.*</query>
+      </grants>
+    </grafana_reader>
+  </users>
+</clickhouse>
