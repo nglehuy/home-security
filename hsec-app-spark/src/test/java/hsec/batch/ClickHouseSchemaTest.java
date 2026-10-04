@@ -1,7 +1,5 @@
 package hsec.batch;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalTime;
@@ -12,12 +10,14 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.types.ArrayType;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructField;
+import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 /** Each result of Transforms must match its table in hsec-db-clickhouse/migrations, by name and type. */

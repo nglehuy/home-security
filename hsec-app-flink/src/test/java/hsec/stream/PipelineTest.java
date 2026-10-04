@@ -1,8 +1,5 @@
 package hsec.stream;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import com.sun.net.httpserver.HttpServer;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
@@ -14,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentLinkedQueue;
+
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.api.connector.sink2.WriterInitContext;
@@ -28,11 +26,14 @@ import org.apache.iceberg.data.IcebergGenerics;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.flink.CatalogLoader;
 import org.apache.iceberg.io.CloseableIterable;
+import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
+
+import com.sun.net.httpserver.HttpServer;
 
 /** Runs the whole job graph on a Flink MiniCluster, with Iceberg tables in a temporary folder. */
 class PipelineTest {

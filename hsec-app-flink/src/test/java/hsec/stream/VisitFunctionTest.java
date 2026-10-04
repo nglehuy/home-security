@@ -1,10 +1,9 @@
 package hsec.stream;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
+import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

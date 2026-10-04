@@ -1,9 +1,5 @@
 package hsec.stream;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.ZoneId;
 import java.util.Base64;
@@ -11,10 +7,15 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+
 import org.apache.flink.streaming.api.functions.async.CollectionSupplier;
 import org.apache.flink.streaming.api.functions.async.ResultFuture;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 class MediaFunctionTest {
     private static final ObjectMapper JSON = new ObjectMapper();

@@ -1,9 +1,8 @@
 package hsec.stream;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
+import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 class RowsTest {

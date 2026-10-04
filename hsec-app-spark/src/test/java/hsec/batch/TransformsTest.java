@@ -1,8 +1,5 @@
 package hsec.batch;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.within;
-
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.LocalTime;
@@ -10,11 +7,14 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.RowFactory;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructType;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import org.junit.jupiter.api.Test;
 
 class TransformsTest extends SparkTestBase {
