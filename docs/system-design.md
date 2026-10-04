@@ -79,7 +79,7 @@ This design needs the system below. It does not install or change these parts.
 | Internet | Pods can reach `discord.com` on TCP 443. Frigate downloads its face models on first start. | `curl -I https://discord.com` from a pod. |
 | LAN access | LAN and WireGuard clients can reach the node address on ports 8971, 8554, and 8555. | Open `https://192.168.1.17:8971` from a LAN client. |
 | Grafana | Existing Grafana with the `grafana-clickhouse-datasource` plugin. A service account token with the Admin role. | Grafana plugin list and service account page. |
-| Admin machine | Terraform 1.16, kubectl, and Docker with `buildx`. A kubeconfig with cluster-admin rights. | `terraform version`, `kubectl auth can-i '*' '*'` |
+| Admin machine | Terraform 1.16, kubectl, Docker with `buildx`, golang-migrate 4.20.1, Java 17, and Spark 4.0.4. A kubeconfig with cluster-admin rights. | `terraform version`, `migrate -version`, `spark-sql --version`, `kubectl auth can-i '*' '*'` |
 | Image registry | A registry that the cluster can pull from, for the two custom images (Flink job and Spark job). | `docker push` from the admin machine and a test pull on the node. |
 | Discord | A webhook URL for the alert channel. | Send a test message with `curl`. |
 
@@ -88,53 +88,71 @@ This design needs the system below. It does not install or change these parts.
 ```mermaid
 flowchart TB
   CAM[IP cameras<br/>home LAN] -- RTSP --> FMQ
-  subgraph FR[Frigate]
+  subgraph FR["Frigate: hsec-app-frigate"]
     FMQ[MQTT publisher]
     FAPI[HTTP API, port 5000]
   end
-  subgraph RP[Redpanda]
+  subgraph RP["Redpanda: hsec-q-redpanda"]
     RPC[(frigate.events, frigate.reviews,<br/>frigate.tracked_object_update, frigate.triggers<br/>with video headers)]
     RPR[(hsec.rejected)]
     RPS[(frigate.available, frigate.stats,<br/>frigate.camera_activity, frigate.profile.*,<br/>frigate.notifications.*, frigate.restart<br/>no video headers)]
     HA[(hsec.alerts)]
   end
-  subgraph ICE["Iceberg: Parquet on RustFS, Postgres catalog"]
+  subgraph ICE["Iceberg: Parquet on RustFS (hsec-db-rustfs), Postgres catalog (hsec-db-iceberg)"]
     IRAW[(events, reviews,<br/>object_updates, triggers)]
     IST[(system_messages)]
     IVIS[(visits)]
     IAL[(alerts)]
   end
+  subgraph FL["Flink job: hsec-app-flink"]
+    SM[System messages]
+    PD[Parse and remove duplicates]
+    VIS[Visits per camera]
+    OBJ[Tracked objects per camera:<br/>event ID, label, score]
+    SEV{Severity alert, and first<br/>time for this review?}
+    NOP[No image message]
+    PICK[Pick a person from data.detections,<br/>else the first detection]
+    IMG[GET snapshot 720 px now]
+    M1[Message 1: alert with image]
+    ENDQ{Alert review<br/>with type end?}
+    SPLIT[Cut the review into<br/>25-second windows]
+    READY{Window ended more<br/>than 20 s ago?}
+    TIMER[Timer: window end + 20 s]
+    CLIP[GET clip for the window]
+    SZ{Clip at most 19 MiB?}
+    M2[Message: clip part i of n]
+    M3[Message: link to part i of n]
+    PD --> VIS
+    PD -- events --> OBJ
+    PD -- reviews --> SEV
+    SEV -- no --> NOP
+    SEV -- yes --> PICK
+    OBJ -.-> PICK
+    PICK --> IMG --> M1
+    PD -- reviews --> ENDQ
+    ENDQ -- yes --> SPLIT --> READY
+    READY -- yes --> CLIP
+    READY -- no --> TIMER --> CLIP
+    CLIP --> SZ
+    SZ -- yes --> M2
+    SZ -- no --> M3
+  end
   FR -. 14 days of alert and detection video .-> HDD[(HDD)]
-  FMQ -- all general topics --> MQ[Mosquitto]
-  MQ --> BR{Redpanda Connect bridge:<br/>topic type}
+  FMQ -- all general topics --> MQ["Mosquitto<br/>hsec-q-mqtt"]
+  MQ --> BR{"Redpanda Connect bridge<br/>hsec-conn-mqtt:<br/>topic type"}
   BR -- camera topic with camera and time --> RPC
   BR -- camera topic without camera or time --> RPR
   BR -- system topic --> RPS
-  RPS --> SM[Flink: system messages] --> IST
-  RPC --> PD[Flink: parse and remove duplicates]
+  RPS --> SM --> IST
+  RPC --> PD
   PD --> IRAW
-  PD --> VIS[Visits per camera] --> IVIS
-  PD -- events --> OBJ[Tracked objects per camera:<br/>event ID, label, score]
-  PD -- reviews --> SEV{Severity alert, and first<br/>time for this review?}
-  SEV -- no --> NOP[No image message]
-  SEV -- yes --> PICK[Pick a person from data.detections,<br/>else the first detection]
-  OBJ -.-> PICK
-  PICK --> IMG[GET snapshot 720 px now]
+  VIS --> IVIS
   FAPI -.-> IMG
-  IMG --> M1[Message 1: alert with image]
-  PD -- reviews --> ENDQ{Alert review<br/>with type end?}
-  ENDQ -- yes --> SPLIT[Cut the review into<br/>25-second windows]
-  SPLIT --> READY{Window ended more<br/>than 20 s ago?}
-  READY -- yes --> CLIP[GET clip for the window]
-  READY -- no --> TIMER[Timer: window end + 20 s] --> CLIP
   FAPI -.-> CLIP
-  CLIP --> SZ{Clip at most 19 MiB?}
-  SZ -- yes --> M2[Message: clip part i of n]
-  SZ -- no --> M3[Message: link to part i of n]
   M1 & M2 & M3 --> HA
   M1 & M2 & M3 --> IAL
-  HA --> NT[Redpanda Connect notifier] --> DC[Discord]
-  IRAW & IVIS & IAL --> SP[Spark, every 15 minutes] --> CH[(ClickHouse)] --> GF[Grafana, existing]
+  HA --> NT["Redpanda Connect notifier<br/>hsec-conn-discord"] --> DC[Discord]
+  IRAW & IVIS & IAL --> SP["Spark, every 15 minutes<br/>hsec-app-spark"] --> CH[("ClickHouse<br/>hsec-db-clickhouse")] --> GF[Grafana, existing]
 ```
 
 The system has five layers:
@@ -147,24 +165,24 @@ The system has five layers:
 
 ## Components
 
-The repository is a monorepo with one folder per app. Each app folder holds its code, its tests, and its Terraform module. See [Monorepo](specs.md#monorepo).
+The repository is a monorepo with one folder per app. Each app folder holds a `README.md`, its code, its tests, and its Terraform module. See [Monorepo](specs.md#monorepo).
 
 | Component | Version | Job | Namespace | Folder | Deployed with |
 | --- | --- | --- | --- | --- | --- |
-| Intel GPU device plugin | 0.37.1 | Gives the UHD 620 to the Frigate pod. | `intel-gpu-plugin` | `hsec-frigate` | Terraform `kubernetes` |
-| Frigate | 0.18.0 | Detects, recognizes faces, keeps alert and detection video for 14 days, and publishes MQTT messages. | `hsec` | `hsec-frigate` | Terraform `kubernetes` |
-| Mosquitto | 2.1.2 | Passes Frigate messages to the bridge. Queues them while the bridge is offline. | `hsec` | `hsec-mqtt` | Terraform `kubernetes` |
-| Redpanda | 26.2.3 (chart 26.2.4) | Stores Frigate messages, system messages, and alerts for 7 days. | `hsec` | `hsec-redpanda` | Terraform `helm` |
-| Redpanda Connect | 4.112.0 | Runs the MQTT bridge and the Discord notifier. | `hsec` | `hsec-redpanda` | Terraform `kubernetes` |
-| Flink Kubernetes Operator | 1.16.1 | Runs and upgrades the Flink job. | `hsec` | `hsec-flink` | Terraform `helm` |
-| Flink | 2.2.1 | Runs the stream job. | `hsec` | `hsec-flink` | Terraform `kubernetes_manifest` |
-| Iceberg | 1.12.0 | Table format over Parquet files. A library inside the Flink and Spark images. | not a pod | `hsec-flink` (table schemas) | Container images |
-| RustFS | 1.0.1 (chart 1.0.1) | S3-compatible object store for Iceberg files and Flink checkpoints. | `hsec` | `hsec-rustfs` | Terraform `helm` |
-| Postgres | 18.6 | Stores the Iceberg JDBC catalog. | `hsec` | `hsec-iceberg` | Terraform `kubernetes` |
-| Spark Operator | 2.5.2 | Runs the Spark job on a schedule. | `hsec` | `hsec-spark` | Terraform `helm` |
-| Spark | 4.0.4 | Computes stats and cleans the Iceberg tables. | `hsec` | `hsec-spark` | Terraform `kubernetes_manifest` |
-| ClickHouse | 26.3.39.7 (LTS) | Stores the stats for the dashboards. | `hsec` | `hsec-clickhouse` | Terraform `kubernetes` |
-| Grafana | existing | Shows the dashboards. This design adds one data source and four dashboards. | existing | `hsec-clickhouse` | Terraform `grafana` |
+| Intel GPU device plugin | 0.37.1 | Gives the UHD 620 to the Frigate pod. | `intel-gpu-plugin` | `terraform/010-workload` | Terraform `kubernetes` |
+| Frigate | 0.18.0 | Detects, recognizes faces, keeps alert and detection video for 14 days, and publishes MQTT messages. | `hsec` | `hsec-app-frigate` | Terraform `kubernetes` |
+| Mosquitto | 2.1.2 | Passes Frigate messages to the bridge. Queues them while the bridge is offline. | `hsec` | `hsec-q-mqtt` | Terraform `kubernetes` |
+| Redpanda | 26.2.3 (chart 26.2.4) | Stores Frigate messages, system messages, and alerts for 7 days. | `hsec` | `hsec-q-redpanda` | Terraform `helm` |
+| Redpanda Connect | 4.112.0 | Runs the MQTT bridge and the Discord notifier. | `hsec` | `hsec-conn-mqtt`, `hsec-conn-discord` | Terraform `kubernetes` |
+| Flink Kubernetes Operator | 1.16.1 | Runs and upgrades the Flink job. | `hsec` | `hsec-app-flink` | Terraform `helm` |
+| Flink | 2.2.1 | Runs the stream job. | `hsec` | `hsec-app-flink` | Terraform `helm` (local chart) |
+| Iceberg | 1.12.0 | Table format over Parquet files. A library inside the Flink and Spark images. | not a pod | `hsec-db-iceberg` (table migrations) | Container images |
+| RustFS | 1.0.1 (chart 1.0.1) | S3-compatible object store for Iceberg files and Flink checkpoints. | `hsec` | `hsec-db-rustfs` | Terraform `helm` |
+| Postgres | 18.6 | Stores the Iceberg JDBC catalog. | `hsec` | `hsec-db-iceberg` | Terraform `kubernetes` |
+| Spark Operator | 2.5.2 | Runs the Spark job on a schedule. | `hsec` | `hsec-app-spark` | Terraform `helm` |
+| Spark | 4.0.4 | Computes stats and cleans the Iceberg tables. | `hsec` | `hsec-app-spark` | Terraform `helm` (local chart) |
+| ClickHouse | 26.3.39.7 (LTS) | Stores the stats for the dashboards. | `hsec` | `hsec-db-clickhouse` | Terraform `kubernetes` |
+| Grafana | existing | Shows the dashboards. This design adds one data source and four dashboards. | existing | `hsec-db-clickhouse` | Terraform `grafana` |
 
 ## Data flow
 
@@ -212,23 +230,23 @@ No store keeps data longer than 30 days, except the Frigate face library and the
 
 All values are starting values. Measure them with `kubectl top pod` after one week and adjust. Memory requests equal memory limits, so the scheduler never overcommits memory.
 
-| Pod | Memory | CPU request | Runs |
-| --- | --- | --- | --- |
-| Frigate | 3 GiB | 1 | Always |
-| Redpanda | 2.5 GiB | 1 | Always |
-| ClickHouse | 1.5 GiB | 0.25 | Always |
-| Flink TaskManager | 1.5 GiB | 0.5 | Always |
-| Flink JobManager | 768 MiB | 0.25 | Always |
-| Flink operator | 512 MiB | 0.1 | Always |
-| RustFS | 512 MiB | 0.1 | Always |
-| Postgres | 512 MiB | 0.1 | Always |
-| Spark operator | 256 MiB | 0.1 | Always |
-| Redpanda Connect bridge | 128 MiB | 0.05 | Always |
-| Redpanda Connect notifier | 256 MiB | 0.05 | Always |
-| Mosquitto | 64 MiB | 0.05 | Always |
-| Intel GPU plugin | 64 MiB | 0.05 | Always |
-| Spark driver | 1 GiB | 0.25 | Every 15 minutes |
-| Spark executor | 1 GiB | 0.5 | Every 15 minutes |
+| Name | Pod | Memory | CPU request | Runs |
+| --- | --- | --- | --- | --- |
+| `hsec-app-flink` | Flink TaskManager | 1.5 GiB | 0.5 | Always |
+| `hsec-app-flink` | Flink JobManager | 768 MiB | 0.25 | Always |
+| `hsec-app-flink` | Flink operator | 512 MiB | 0.1 | Always |
+| `hsec-app-frigate` | Frigate | 3 GiB | 1 | Always |
+| `hsec-app-spark` | Spark operator | 256 MiB | 0.1 | Always |
+| `hsec-app-spark` | Spark driver | 1 GiB | 0.25 | Every 15 minutes |
+| `hsec-app-spark` | Spark executor | 1 GiB | 0.5 | Every 15 minutes |
+| `hsec-conn-discord` | Redpanda Connect notifier | 256 MiB | 0.05 | Always |
+| `hsec-conn-mqtt` | Redpanda Connect bridge | 128 MiB | 0.05 | Always |
+| `hsec-db-clickhouse` | ClickHouse | 1.5 GiB | 0.25 | Always |
+| `hsec-db-iceberg` | Postgres | 512 MiB | 0.1 | Always |
+| `hsec-db-rustfs` | RustFS | 512 MiB | 0.1 | Always |
+| `hsec-q-mqtt` | Mosquitto | 64 MiB | 0.05 | Always |
+| `hsec-q-redpanda` | Redpanda | 2.5 GiB | 1 | Always |
+| none, in `terraform/010-workload` | Intel GPU plugin | 64 MiB | 0.05 | Always |
 
 Totals:
 
@@ -241,22 +259,22 @@ Totals:
 
 SSD volumes:
 
-| Volume | Size | Expected use |
-| --- | --- | --- |
-| Redpanda | 10 GiB | Up to 6.3 GiB, limited by topic retention (1 GiB of it for alerts with clips) |
-| Frigate configuration | 5 GiB | 2 to 4 GiB (models and database) |
-| Postgres | 2 GiB | Under 100 MiB |
-| Mosquitto | 1 GiB | Under 100 MiB |
-| Total | 18 GiB | About 9 GiB |
+| Name | Volume | Size | Expected use |
+| --- | --- | --- | --- |
+| `hsec-app-frigate` | Frigate configuration | 5 GiB | 2 to 4 GiB (models and database) |
+| `hsec-db-iceberg` | Postgres | 2 GiB | Under 100 MiB |
+| `hsec-q-mqtt` | Mosquitto | 1 GiB | Under 100 MiB |
+| `hsec-q-redpanda` | Redpanda | 10 GiB | Up to 6.3 GiB, limited by topic retention (1 GiB of it for alerts with clips) |
+| Total | | 18 GiB | About 9 GiB |
 
 HDD volumes:
 
-| Volume | Size | Expected use |
-| --- | --- | --- |
-| Frigate media | 200 GiB | 14 days of alert and detection video (about 32 GB at 1x), and 30 days of snapshots. See [Video volume](#video-volume). |
-| RustFS | 400 GiB data and 1 GiB logs | About 32 GB at 1x, mostly alert clips |
-| ClickHouse | 5 GiB | Under 1 GiB |
-| Total | 606 GiB of the 1 TB HDD | About 70 GB at 1x |
+| Name | Volume | Size | Expected use |
+| --- | --- | --- | --- |
+| `hsec-app-frigate` | Frigate media | 200 GiB | 14 days of alert and detection video (about 32 GB at 1x), and 30 days of snapshots. See [Video volume](#video-volume). |
+| `hsec-db-clickhouse` | ClickHouse | 5 GiB | Under 1 GiB |
+| `hsec-db-rustfs` | RustFS | 400 GiB data and 1 GiB logs | About 32 GB at 1x, mostly alert clips |
+| Total | | 606 GiB of the 1 TB HDD | About 70 GB at 1x |
 
 ClickHouse on the HDD:
 
@@ -357,26 +375,36 @@ Kubernetes restarts each failed pod. The table shows what else happens.
 - Alternatives: Kafka Connect (needs a Java worker), or custom Python code.
 - Consequences: no custom code to maintain. Unit tests run with `rpk connect test`.
 
-### ADR-3: Terraform for everything, in two stages
+### ADR-3: Terraform modules per app, applied in two roots
 
-- Context: you want all deployment code in plain Terraform. During the plan, the `kubernetes_manifest` resource reads the cluster [8]. So the operator CRDs must exist before the plan that uses them.
+- Context:
+  - You want all deployment code in plain Terraform, next to the code of each app.
+  - You want the deployment applied in separate steps.
+  - During the plan, the `kubernetes_manifest` resource reads the cluster [8]. So a custom resource cannot be planned in the same apply that installs its CRDs.
 - Decision:
-  - Each `hsec-*` app folder has its own Terraform module.
-  - The root `deploy/platform` creates the namespaces and calls the GPU plugin and operator modules.
-  - The root `deploy/apps` creates the passwords and the network policies, and calls the app modules.
-  - Own apps use plain `kubernetes_*` resources. Charts that ship operators or CRDs, and the Redpanda and RustFS charts, use `helm_release`.
+  - Each `hsec-*` app folder has its own Terraform module in `<app>/terraform`.
+  - Two roots in `terraform/` call the modules, and you apply them one after the other. `010-workload` creates the namespaces, the Intel GPU plugin, the passwords, the Secrets, the network policies, RustFS, Redpanda, Mosquitto, ClickHouse, and the Iceberg catalog. `020-app` installs Frigate, the Redpanda Connect bridge and notifier, Flink, and Spark.
+  - The roots share no Terraform outputs. A later root uses the Kubernetes Secrets and the fixed service names of an earlier root.
+  - The Flink and Spark jobs are small local Helm charts. Each module installs the operator and then the job with `helm_release`, so one apply works on a fresh cluster.
+  - Own apps use plain `kubernetes_*` resources. Charts that ship operators, and the Redpanda and RustFS charts, use `helm_release`.
 - Alternatives:
-  - One Terraform root per app folder. That means about ten applies in a fixed order, and passwords must move between states.
-  - One stage with `-target` flags.
+  - One Terraform root per app folder. That means about ten applies in a fixed order.
+  - `kubernetes_manifest` for the jobs. That needs a second apply, or the operators in an earlier root.
   - No Helm at all. That means rewriting each chart by hand.
-- Consequences: two `terraform apply` runs on a fresh cluster. Each app keeps its deployment code next to its own code.
+- Consequences: two `terraform apply` runs on a fresh cluster. Between them, you build the images and run the schema migrations. Each app keeps its deployment code next to its own code.
 
 ### ADR-4: Iceberg with a JDBC catalog in Postgres
 
-- Context: Flink and Spark both write to the same tables. Iceberg needs a catalog that commits each change atomically. The Hadoop catalog is not safe for concurrent writes on S3 [9].
+- Context:
+  - Flink and Spark write to the same tables at the same time. Flink commits to all seven tables every 60 seconds. Each night, Spark deletes old partitions, compacts files, and expires snapshots while Flink keeps committing.
+  - Each Iceberg commit writes a new metadata file and then moves the pointer to the current metadata file. The move must be atomic. Then, of two writers that start from the same version, one wins and the other retries.
+  - The JDBC catalog does the move in one database transaction, so the database must support atomic transactions [10].
 - Decision: the Iceberg JDBC catalog, stored in Postgres [10].
-- Alternatives: Lakekeeper, Polaris, or Nessie (one more service), or Hive Metastore (a heavy service plus its own database).
-- Consequences: one small Postgres pod. Only Flink and Spark can open the tables. Other tools must read the Parquet files through Iceberg metadata.
+- Alternatives:
+  - The Hadoop catalog, which keeps the pointer as files on RustFS. It needs an atomic rename, and the Iceberg docs say that concurrent writes with it are not safe on S3 [9]. On RustFS, two writers can write the same version file, and the second file silently replaces the first. A lost Flink commit leaves Parquet files that no table points to. The nightly `remove_orphan_files` then deletes them, so the rows are lost without an error. It also needs the Hadoop S3A file system instead of `S3FileIO`.
+  - The JDBC catalog with SQLite on a shared SSD volume. Every pod that uses the catalog must mount the same volume, so this works only on one node. Both images also need the SQLite driver.
+  - Lakekeeper, Polaris, or Nessie (one more service), or Hive Metastore (a heavy service plus its own database).
+- Consequences: one small Postgres pod with 512 MiB of memory. It gives safe commits to Flink, Spark, and the schema migrations. Only Spark and Flink can open the tables. Other tools must read the Parquet files through Iceberg metadata.
 
 ### ADR-5: Spark writes stats to ClickHouse every 15 minutes
 
@@ -468,6 +496,24 @@ Kubernetes restarts each failed pod. The table shows what else happens.
   - A reference older than 14 days finds no video.
   - Snapshot images and alert clips leave the home network through Discord.
 
+### ADR-13: Schema migrations by hand
+
+- Context:
+  - You want each table schema in the folder of its database app.
+  - You want to run each schema change yourself, not as a side effect of a deploy.
+  - golang-migrate has a ClickHouse driver, but no driver for Spark or Iceberg [29].
+- Decision:
+  - The ClickHouse migrations are in `hsec-db-clickhouse/migrations/`. You run them with golang-migrate, which records the applied version in ClickHouse.
+  - The Iceberg migrations are in `hsec-db-iceberg/migrations/`, in Spark SQL, with the golang-migrate file names. A script runs one file with a local `spark-sql`, through `kubectl port-forward` tunnels to Postgres and RustFS.
+  - Terraform, Flink, and Spark never create or change tables.
+- Alternatives:
+  - The Flink job creates the Iceberg tables, and a Terraform Job runs the ClickHouse schema. Then a deploy can change a schema without your action.
+  - pyiceberg for the Iceberg migrations. It needs its own Python project.
+- Consequences:
+  - On a fresh cluster, you run the migrations between the two applies.
+  - Nothing records which Iceberg files ran. You run each file once, in order.
+  - The Flink tests create their test tables in Java code, so they must match the migrations.
+
 ## Open questions
 
 1. How many cameras are there, and what are their RTSP URLs, resolutions, and bitrates? A 25-second clip part must stay under 19 MiB, so each record stream can use up to about 6 Mbit/s.
@@ -533,3 +579,5 @@ Kubernetes restarts each failed pod. The table shows what else happens.
 [27] K3s, "Advanced Options and Configuration: SELinux Support," K3s Documentation. Accessed: Oct. 4, 2026. [Online]. Available: https://docs.k3s.io/advanced#selinux-support
 
 [28] Frigate contributors, "`frigate/ffmpeg_presets.py`," GitHub. Accessed: Oct. 4, 2026. [Online]. Available: https://github.com/blakeblackshear/frigate/blob/master/frigate/ffmpeg_presets.py
+
+[29] golang-migrate contributors, "golang-migrate/migrate," GitHub. Accessed: Oct. 4, 2026. [Online]. Available: https://github.com/golang-migrate/migrate

@@ -11,6 +11,7 @@
 - [Monorepo](#monorepo)
 - [Terraform](#terraform)
 - [Container images](#container-images)
+- [Schema migrations](#schema-migrations)
 - [Intel GPU plugin](#intel-gpu-plugin)
 - [Frigate](#frigate)
 - [Mosquitto](#mosquitto)
@@ -60,109 +61,126 @@ Other names:
 
 ## Monorepo
 
-The repository is a monorepo with one folder per app. Each app folder holds the code, the configuration files, the tests, the Dockerfile (if the app has one), and a Terraform module for that app.
+The repository is a monorepo with one folder per app. Each app folder holds a `README.md`, the code, the configuration files, and the tests. It also holds a Terraform module in `<app>/terraform`. Flink and Spark also have a Dockerfile.
 
-| Folder | Parts | Terraform modules | Other contents |
+| Folder | Parts | Terraform | Other contents |
 | --- | --- | --- | --- |
-| `hsec-frigate` | Frigate, Intel GPU plugin | `terraform/platform` (GPU plugin), `terraform` (Frigate) | `config.seed.yml.tftpl` |
-| `hsec-mqtt` | Mosquitto | `terraform` | `mosquitto.conf`, `acl` |
-| `hsec-redpanda` | Redpanda, topics, bridge, Discord notifier | `terraform` | `connect/` with both pipelines and their tests |
-| `hsec-rustfs` | RustFS, buckets | `terraform` | none |
-| `hsec-iceberg` | Postgres for the Iceberg JDBC catalog | `terraform` | none. The Flink job creates the tables. |
-| `hsec-flink` | Flink operator, stream job | `terraform/platform` (operator), `terraform` (job) | Maven project, `Dockerfile` |
-| `hsec-spark` | Spark operator, batch job | `terraform/platform` (operator), `terraform` (job) | Python project, `Dockerfile` |
-| `hsec-clickhouse` | ClickHouse, schema, Grafana setup | `terraform` | `config.d/`, `users.d/`, `schema.sql`, `grafana/dashboards/` |
+| `hsec-app-frigate` | Frigate | `terraform` | `config.seed.yml.tftpl` |
+| `hsec-q-mqtt` | Mosquitto | `terraform` | `mosquitto.conf`, `acl` |
+| `hsec-q-redpanda` | Redpanda, topics | `terraform` | none |
+| `hsec-conn-mqtt` | Redpanda Connect bridge from MQTT to Redpanda | `terraform` | `connect/frigate-to-redpanda.yaml` and its tests |
+| `hsec-conn-discord` | Redpanda Connect notifier from Redpanda to Discord | `terraform` | `connect/alerts-to-discord.yaml` and its tests |
+| `hsec-db-rustfs` | RustFS, buckets | `terraform` | none |
+| `hsec-db-iceberg` | Postgres for the Iceberg JDBC catalog, Iceberg table migrations | `terraform` | `migrations/`, `migrate.sh` |
+| `hsec-app-flink` | Flink operator, stream job | `terraform` (operator and job), `terraform/chart/` (local Helm chart of the job) | Maven project, `Dockerfile` |
+| `hsec-app-spark` | Spark operator, batch job | `terraform` (operator and job), `terraform/chart/` (local Helm chart of the job) | Maven project, `Dockerfile` |
+| `hsec-db-clickhouse` | ClickHouse, table migrations, Grafana setup | `terraform` | `config.d/`, `users.d/`, `migrations/`, `grafana/dashboards/` |
 
 Shared folders:
 
 | Folder | Contents |
 | --- | --- |
-| `deploy/platform` | Terraform root for stage 1. Creates the namespaces and calls the `terraform/platform` modules. |
-| `deploy/apps` | Terraform root for stage 2. Creates the passwords and the network policies, and calls the `terraform` modules. |
+| `terraform/010-workload` | Terraform root 1: the namespaces, the Intel GPU plugin, passwords, Secrets, network policies, and the data services |
+| `terraform/020-app` | Terraform root 2: Frigate, the Redpanda Connect bridge and notifier, Flink, and Spark |
 | `docs` | Design documents |
 | `tests` | The end-to-end smoke test |
 
 Rules for the app folders:
 
+- Each `<app>/terraform` folder is a module. Exactly one root in `terraform/` calls it.
 - A module reads files only from its own app folder.
 - A module has no `provider` blocks. It lists its providers in `required_providers`, and the root configures them.
-- A module never creates passwords. The root creates them and passes them in. The module creates the Kubernetes Secrets that its pods need.
-- A module gives other modules its service addresses as outputs. The root passes these outputs to the modules that use them, so Terraform knows the order.
+- `terraform/010-workload` creates all passwords and all Kubernetes Secrets. A module gets the names of its Secrets as inputs.
+- A module in `010-workload` gets password values from its root. A module in `020-app` that needs a password value reads it from its Secret with the data source `kubernetes_secret_v1`.
+- Modules use the fixed in-cluster addresses from [Conventions](#conventions). They have no outputs.
 - A module has its own `tests/` folder for `terraform test`.
+
+Rules for the README files:
+
+- Each app folder and each root in `terraform/` has a `README.md`.
+- The README of an app says what the service does, how Terraform deploys it, what its files are, and how to test it.
+- The README of a root lists its contents, the steps before and during the apply, its variables, and its state.
+- Each README links to its sections in this file. This file stays the only source of the details, so a README does not copy them.
+- If you change a section of this file, update the README that links to it.
 
 ## Terraform
 
-### Stages
+### Roots
 
-Terraform has two root modules in `deploy/`. On a fresh cluster, do these steps in order:
+Terraform has two root modules in `terraform/`. Each root has its own state, and you apply each root on its own. `020-app` uses Kubernetes objects of `010-workload`, not its Terraform outputs. On a fresh cluster, do these steps in order:
 
-1. In `deploy/platform`, run `terraform init` and `terraform apply`.
+1. In `terraform/010-workload`, run `terraform init` and `terraform apply`.
 2. Build and push the two custom images. See [Container images](#container-images).
-3. In `deploy/apps`, run `terraform init` and `terraform apply`.
+3. Run the ClickHouse migrations and the Iceberg migrations. See [Schema migrations](#schema-migrations).
+4. In `terraform/020-app`, run `terraform init` and `terraform apply`.
 
-| Stage | Creates | Calls the modules |
+| Root | Creates directly | Calls the modules |
 | --- | --- | --- |
-| `deploy/platform` | Namespaces | `hsec-frigate/terraform/platform`, `hsec-flink/terraform/platform`, `hsec-spark/terraform/platform` |
-| `deploy/apps` | Passwords, network policies | `terraform` in all eight app folders |
+| `terraform/010-workload` | Namespaces `hsec` and `intel-gpu-plugin`, Intel GPU plugin, passwords, all Kubernetes Secrets, network policies | `hsec-db-rustfs`, `hsec-q-redpanda`, `hsec-q-mqtt`, `hsec-db-clickhouse`, `hsec-db-iceberg` |
+| `terraform/020-app` | nothing | `hsec-app-frigate`, `hsec-conn-mqtt`, `hsec-conn-discord`, `hsec-app-flink`, `hsec-app-spark` |
 
-The job modules in `hsec-flink` and `hsec-spark` use `kubernetes_manifest` for the operator custom resources. This resource reads the cluster during the plan [1]. So the operator CRDs from the `deploy/platform` stage must exist first.
+`hsec-app-flink` and `hsec-app-spark` each install an operator and a job in the same apply. The job is a custom resource of the operator CRDs. A `kubernetes_manifest` resource reads the CRD from the cluster during the plan [1], so it fails on a fresh cluster. So each job is a small local Helm chart in `<app>/terraform/chart/`. The module installs the operator chart and then the job chart, both with `helm_release`. The job release has `depends_on` on the operator release. Helm checks the custom resource only at install time. At that point, the operator CRDs already exist.
 
-Module inputs and outputs in `deploy/apps`. Each module also gets `namespace` and the common labels.
+Module inputs. Each module also gets `namespace` and the common labels.
 
-| Module | Main inputs | Outputs |
+| Module | Root | Main inputs |
 | --- | --- | --- |
-| `hsec-mqtt` | SSD class, MQTT passwords | `mqtt_address` |
-| `hsec-redpanda` | SSD class, `mqtt_address`, bridge password, Discord webhook URL | `kafka_address` |
-| `hsec-rustfs` | HDD class, RustFS keys | `s3_endpoint` |
-| `hsec-iceberg` | SSD class, Postgres password | `jdbc_uri` |
-| `hsec-clickhouse` | HDD class, time zone, ClickHouse passwords, Grafana namespace | `clickhouse_http` |
-| `hsec-flink` | Image, `kafka_address`, `s3_endpoint`, `jdbc_uri`, `frigate_api_address`, passwords, time zone, `frigate_url` | none |
-| `hsec-spark` | Image, `s3_endpoint`, `jdbc_uri`, `clickhouse_http`, passwords, time zone, night window | none |
-| `hsec-frigate` | SSD and HDD classes, time zone, cameras, RTSP password, `mqtt_address`, MQTT password | `frigate_api_address` |
+| `hsec-db-rustfs` | `010-workload` | HDD class, Secret `rustfs-root` |
+| `hsec-q-redpanda` | `010-workload` | SSD class |
+| `hsec-q-mqtt` | `010-workload` | SSD class, Secret `mosquitto-env` |
+| `hsec-db-clickhouse` | `010-workload` | HDD class, time zone, ClickHouse passwords, Grafana namespace |
+| `hsec-db-iceberg` | `010-workload` | SSD class, Secret `postgres-iceberg` |
+| `hsec-app-frigate` | `020-app` | SSD and HDD classes, time zone, cameras, Secret `frigate-env` |
+| `hsec-conn-mqtt` | `020-app` | Secret `bridge-env` |
+| `hsec-conn-discord` | `020-app` | Time zone, Secret `notifier-env` |
+| `hsec-app-flink` | `020-app` | Image, time zone, `frigate_url`, Secrets `flink-env` and `rustfs-root` |
+| `hsec-app-spark` | `020-app` | Image, time zone, night window, Secret `spark-env` |
 
 ### Providers and versions
 
-| Item | Version constraint |
-| --- | --- |
-| Terraform | `~> 1.16` |
-| `hashicorp/kubernetes` | `~> 3.3` |
-| `hashicorp/helm` | `~> 3.3` |
-| `hashicorp/random` | `~> 3.9` |
-| `grafana/grafana` | `~> 4.47` (only in `deploy/apps` and `hsec-clickhouse`) |
+| Item | Version constraint | Used in |
+| --- | --- | --- |
+| Terraform | `~> 1.16` | All roots |
+| `hashicorp/kubernetes` | `~> 3.3` | All roots |
+| `hashicorp/helm` | `~> 3.3` | `010-workload`, `020-app` |
+| `hashicorp/random` | `~> 3.9` | `010-workload` |
+| `grafana/grafana` | `~> 4.47` | `010-workload` (for `hsec-db-clickhouse`) |
 
 The roots configure the providers. The modules only list them in `required_providers`. Commit `.terraform.lock.hcl` for both roots, so that every run uses the same provider builds.
 
 ### State
 
-Each stage stores its state in a Kubernetes Secret in `kube-system`:
+Each root stores its state in a Kubernetes Secret in `kube-system`:
 
-```hcl
+```terraform
 terraform {
   backend "kubernetes" {
-    secret_suffix = "hsec-apps" # "hsec-platform" in the platform stage
+    secret_suffix = "hsec-010-workload" # "hsec-020-app" in the other root
     namespace     = "kube-system"
     config_path   = "~/.kube/config"
   }
 }
 ```
 
-The state holds all passwords in plain text. Only cluster admins can read Secrets in `kube-system`.
+The state of `010-workload` holds all passwords in plain text. The state of `020-app` holds the values that it reads from Secrets. Only cluster admins can read Secrets in `kube-system`.
 
 ### Secrets
 
-The root `deploy/apps` creates these passwords with `random_password`. Each module stores the passwords that it gets in Kubernetes Secrets:
+The root `terraform/010-workload` creates these passwords with `random_password`, and stores them in Kubernetes Secrets:
 
-| Password | Used by |
-| --- | --- |
-| `mqtt_frigate` | Frigate, Mosquitto |
-| `mqtt_bridge` | Bridge, Mosquitto |
-| `rustfs_access_key`, `rustfs_secret_key` | RustFS, Flink, Spark, bucket job |
-| `postgres_iceberg` | Postgres, Flink, Spark |
-| `clickhouse_admin` | ClickHouse, schema job |
-| `clickhouse_spark` | ClickHouse, Spark |
-| `clickhouse_grafana` | ClickHouse, Grafana data source |
+| Password | Secrets | Used by |
+| --- | --- | --- |
+| `mqtt_frigate` | `frigate-env`, `mosquitto-env` | Frigate, Mosquitto |
+| `mqtt_bridge` | `bridge-env`, `mosquitto-env` | Bridge, Mosquitto |
+| `rustfs_access_key`, `rustfs_secret_key` | `rustfs-root`, `flink-env`, `spark-env` | RustFS, bucket Job, Flink, Spark |
+| `postgres_iceberg` | `postgres-iceberg`, `flink-env`, `spark-env` | Postgres, Flink, Spark |
+| `clickhouse_admin` | `clickhouse-admin` | ClickHouse, ClickHouse migrations |
+| `clickhouse_spark` | `spark-env` | ClickHouse, Spark |
+| `clickhouse_grafana` | none. The `hsec-db-clickhouse` module gives it to the Grafana data source. | ClickHouse, Grafana |
 
-You give three secret values as sensitive variables: `discord_webhook_url`, `frigate_rtsp_password`, and `grafana_auth`. Put them in `deploy/apps/terraform.tfvars` or in `TF_VAR_*` environment variables. The file `deploy/apps/terraform.tfvars.example` shows all variables without real values.
+Each password uses only letters and digits (`special = false`), so that it fits in a URL without escaping.
+
+You give three secret values to `010-workload` as sensitive variables. `discord_webhook_url` goes into `notifier-env`, and `frigate_rtsp_password` goes into `frigate-env`. `grafana_auth` is only for the Grafana provider. Put them in `terraform/010-workload/terraform.tfvars` or in `TF_VAR_*` environment variables. Each root has a `terraform.tfvars.example` with all its variables and no real values.
 
 Add these lines to `.gitignore`:
 
@@ -176,50 +194,185 @@ Add these lines to `.gitignore`:
 
 ### Variables
 
-The root `deploy/apps` has these variables. The root `deploy/platform` uses only `kubeconfig_path`, `kube_context`, `namespace`, and `node_name`.
-
-| Variable | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `kubeconfig_path` | string | `~/.kube/config` | Cluster access |
-| `kube_context` | string | none | Cluster access |
-| `namespace` | string | `hsec` | Namespace for all apps |
-| `timezone` | string | `Asia/Singapore` | Local time for Frigate, Flink, Spark, and ClickHouse |
-| `node_name` | string | none | Node for the GPU plugin |
-| `ssd_storage_class` | string | none | Class for SSD volumes |
-| `hdd_storage_class` | string | none | Class for the Frigate media, RustFS, and ClickHouse volumes |
-| `image_registry` | string | none | Registry of the custom images |
-| `flink_image_tag` | string | none | Tag of the Flink job image |
-| `spark_image_tag` | string | none | Tag of the Spark job image |
-| `cameras` | map of objects | none | Per camera: `detect_url`, `record_url`, `detect_width`, `detect_height` |
-| `night_start`, `night_end` | string | `23:00`, `06:00` | Night window for the day and night stats |
-| `frigate_url` | string | none | Base URL in alert messages, for example `https://192.168.1.17:8971` |
-| `grafana_url` | string | none | Grafana API address |
-| `grafana_namespace` | string | none | Namespace of the Grafana pods, for the network policy |
-| `discord_webhook_url` | string, sensitive | none | Alert channel |
-| `frigate_rtsp_password` | string, sensitive | none | Camera password |
-| `grafana_auth` | string, sensitive | none | Grafana service account token |
+| Variable | Type | Default | Roots | Purpose |
+| --- | --- | --- | --- | --- |
+| `kubeconfig_path` | string | `~/.kube/config` | All | Cluster access |
+| `kube_context` | string | none | All | Cluster access |
+| `namespace` | string | `hsec` | All | Namespace for all apps |
+| `node_name` | string | none | `010-workload` | Node for the GPU plugin |
+| `timezone` | string | `Asia/Singapore` | `010-workload`, `020-app` | Local time for Frigate, Flink, Spark, ClickHouse, and the notifier |
+| `ssd_storage_class` | string | none | `010-workload`, `020-app` | Class for SSD volumes |
+| `hdd_storage_class` | string | none | `010-workload`, `020-app` | Class for the Frigate media, RustFS, and ClickHouse volumes |
+| `grafana_url` | string | none | `010-workload` | Grafana API address |
+| `grafana_namespace` | string | none | `010-workload` | Namespace of the Grafana pods, for the network policy |
+| `discord_webhook_url` | string, sensitive | none | `010-workload` | Alert channel |
+| `frigate_rtsp_password` | string, sensitive | none | `010-workload` | Camera password |
+| `grafana_auth` | string, sensitive | none | `010-workload` | Grafana service account token |
+| `image_registry` | string | none | `020-app` | Registry of the custom images |
+| `flink_image_tag` | string | none | `020-app` | Tag of the Flink job image |
+| `spark_image_tag` | string | none | `020-app` | Tag of the Spark job image |
+| `cameras` | map of objects | none | `020-app` | Per camera: `detect_url`, `record_url`, `detect_width`, `detect_height` |
+| `night_start`, `night_end` | string | `23:00`, `06:00` | `020-app` | Night window for the day and night stats |
+| `frigate_url` | string | none | `020-app` | Base URL in alert links, for example `https://192.168.1.17:8971` |
 
 Camera URLs contain the text `{FRIGATE_RTSP_PASSWORD}`. Frigate replaces it with the environment variable of the same name, so the password stays out of the configuration file.
 
 ## Container images
 
-You build two images. All other images are public.
+You build two images. Each custom image has the name of its app folder, for example `hsec-app-flink`. All other images come from public registries, and they keep their public names.
 
 | Image | Base | Contents |
 | --- | --- | --- |
-| `hsec-flink` | `flink:2.2.1-scala_2.12-java17` | The job jar at `/opt/flink/usrlib/hsec-stream.jar`. The jar includes `flink-connector-kafka:5.0.0-2.2`, `iceberg-flink-runtime-2.2:1.12.0`, `iceberg-aws-bundle:1.12.0`, and `postgresql:42.7.13`. |
-| `hsec-spark` | `apache/spark:4.0.4-scala2.13-java17-python3-ubuntu` | The jars `iceberg-spark-runtime-4.0_2.13:1.12.0`, `iceberg-aws-bundle:1.12.0`, `postgresql:42.7.13`, `clickhouse-spark-runtime-4.0_2.13:0.10.0`, and `clickhouse-jdbc:0.9.5` with the `all` classifier [2]. The Python package `hsec_batch` at `/opt/hsec`. |
+| `hsec-app-flink` | `flink:2.2.1-scala_2.12-java17` | The job jar at `/opt/flink/usrlib/hsec-stream.jar`. The jar includes `flink-connector-kafka:5.0.0-2.2`, `iceberg-flink-runtime-2.2:1.12.0`, `iceberg-aws-bundle:1.12.0`, and `postgresql:42.7.13`. |
+| `hsec-app-spark` | `apache/spark:4.0.4-scala2.13-java17-ubuntu` | The jars `iceberg-spark-runtime-4.0_2.13:1.12.0`, `iceberg-aws-bundle:1.12.0`, `postgresql:42.7.13`, `clickhouse-spark-runtime-4.0_2.13:0.10.0`, and `clickhouse-jdbc:0.9.5` with the `all` classifier [2]. The job jar at `/opt/hsec/hsec-batch.jar`. The job jar does not include these libraries, because the image already has them. |
 
 The host CPU is amd64. If you build on an Apple Silicon machine, add `--platform linux/amd64`:
 
 ```sh
-docker buildx build --platform linux/amd64 -t <registry>/hsec-flink:<tag> --push hsec-flink/
-docker buildx build --platform linux/amd64 -t <registry>/hsec-spark:<tag> --push hsec-spark/
+docker buildx build --platform linux/amd64 -t <registry>/hsec-app-flink:<tag> --push hsec-app-flink/
+docker buildx build --platform linux/amd64 -t <registry>/hsec-app-spark:<tag> --push hsec-app-spark/
 ```
+
+## Schema migrations
+
+Terraform creates no tables, and the Flink and Spark jobs never create or change tables. You run the schema migrations by hand. If a table is missing, the Flink job fails at start, and a Spark run fails at its first write.
+
+Rules:
+
+- Each database app keeps its migrations in its `migrations/` folder: `hsec-db-clickhouse/migrations/` and `hsec-db-iceberg/migrations/`.
+- The file names use the golang-migrate format with a 4-digit sequence, for example `0001_init.up.sql` [37].
+- To add a file, run `migrate create -ext sql -dir migrations -seq -digits 4 <name>` in the app folder.
+- Never change a file after it ran on the cluster. Write a new file instead.
+- On a fresh cluster, run the migrations after `terraform/010-workload` and before `terraform/020-app`. See [Roots](#roots).
+- If a new job version needs a schema change, run the migration before you deploy that job version.
+
+### ClickHouse migrations
+
+golang-migrate 4.20.1 runs the ClickHouse migrations with its ClickHouse driver [37], [38].
+
+- Each `.up.sql` file has a matching `.down.sql` file. The tests use the `.down.sql` files.
+- golang-migrate records the applied version in the table `hsec.schema_migrations`.
+- The driver uses the native protocol on port 9000. The URL has `x-multi-statement=true`, because one file holds several statements [38].
+- The driver connects to the database `hsec`, so the database must exist first. The ClickHouse pod sets `CLICKHOUSE_DB=hsec`, and the image creates the database at its first start [39].
+- The user is `hsec_admin`. The root `terraform/010-workload` stores its password in the Secret `clickhouse-admin` as `CLICKHOUSE_ADMIN_PASSWORD`. No pod uses this Secret. It is only for the migrations.
+
+To run the migrations from the admin machine, open a port forward in a first terminal:
+
+```sh
+kubectl -n hsec port-forward svc/clickhouse 9000:9000
+```
+
+In a second terminal, run this from the repository root:
+
+```sh
+CH_PASSWORD=$(kubectl -n hsec get secret clickhouse-admin -o jsonpath='{.data.CLICKHOUSE_ADMIN_PASSWORD}' | base64 -d)
+migrate -path hsec-db-clickhouse/migrations \
+  -database "clickhouse://localhost:9000?username=hsec_admin&password=${CH_PASSWORD}&database=hsec&x-multi-statement=true" \
+  up
+```
+
+Do not run `migrate down` on the cluster. It runs the `.down.sql` files, which delete the tables and their data.
+
+If a file fails part way, golang-migrate marks the version as dirty and stops [37]. Undo the partial change by hand. Then run `migrate force <last good version>` and `migrate up` again.
+
+### Iceberg migrations
+
+golang-migrate has no driver for Spark or Iceberg [37]. An Iceberg table change must write new metadata files to RustFS through an Iceberg engine. So the Iceberg migrations use the golang-migrate file names, but a local `spark-sql` runs them.
+
+- The folder has only `.up.sql` files. A dropped Iceberg table loses its data, so no `.down.sql` files exist.
+- Nothing records which files ran. You run each file once, in order.
+- `0001_init.up.sql` uses `IF NOT EXISTS`, and `WRITE ORDERED BY` gives the same result each time. So a second run of this file changes nothing.
+- Spark SQL `timestamp` creates an Iceberg `timestamptz` column, and `array<string>` creates a list of strings [40].
+- `PARTITIONED BY (days(event_ts))` creates the daily partition. `WRITE ORDERED BY` sets the sort order, and it needs the Iceberg SQL extensions [41].
+
+`hsec-db-iceberg/migrations/0001_init.up.sql` creates the namespace and the seven tables in [Tables](#tables). The `events` table:
+
+```sql
+CREATE NAMESPACE IF NOT EXISTS lake.hsec;
+
+CREATE TABLE IF NOT EXISTS lake.hsec.events (
+    message_id      string,
+    event_id        string,
+    msg_type        string,
+    camera          string,
+    label           string,
+    sub_label       string,
+    sub_label_score double,
+    score           double,
+    top_score       double,
+    current_zones   array<string>,
+    entered_zones   array<string>,
+    face_score      double,
+    has_snapshot    boolean,
+    has_clip        boolean,
+    start_ts        timestamp,
+    end_ts          timestamp,
+    event_ts        timestamp,
+    ingest_ts       timestamp
+)
+USING iceberg
+PARTITIONED BY (days(event_ts))
+TBLPROPERTIES (
+    'format-version' = '2',
+    'write.format.default' = 'parquet',
+    'write.parquet.compression-codec' = 'zstd',
+    'write.delete.mode' = 'copy-on-write'
+);
+
+ALTER TABLE lake.hsec.events WRITE ORDERED BY camera, event_ts;
+```
+
+You run the Iceberg migrations on the admin machine, through `kubectl port-forward` tunnels to Postgres and RustFS. The admin machine needs Java 17 and Spark 4.0.4 (`spark-4.0.4-bin-hadoop3`), the same Spark version as the batch job.
+
+Open each tunnel in its own terminal, and keep both open:
+
+```sh
+kubectl -n hsec port-forward svc/postgres 15432:5432
+kubectl -n hsec port-forward svc/rustfs-svc 19000:9000
+```
+
+The local ports are 15432 and 19000, so that they do not clash with a local Postgres or with the ClickHouse tunnel on port 9000.
+
+Then run each new file from the repository root:
+
+```sh
+hsec-db-iceberg/migrate.sh hsec-db-iceberg/migrations/0001_init.up.sql
+```
+
+The script `hsec-db-iceberg/migrate.sh <file>` does these steps:
+
+1. Read `POSTGRES_ICEBERG_PASSWORD`, `RUSTFS_ACCESS_KEY`, and `RUSTFS_SECRET_KEY` from the Secret `spark-env` with `kubectl`.
+2. Go to a new temporary folder. Spark writes `metastore_db`, `derby.log`, and `spark-warehouse` into the current folder, and these files do not belong in the repository.
+3. Run `spark-sql` with the command below on the file.
+4. Exit with the exit code of `spark-sql`.
+
+```sh
+spark-sql --master "local[1]" \
+  --packages org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.12.0,org.apache.iceberg:iceberg-aws-bundle:1.12.0,org.postgresql:postgresql:42.7.13 \
+  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+  --conf spark.sql.catalog.lake=org.apache.iceberg.spark.SparkCatalog \
+  --conf spark.sql.catalog.lake.type=jdbc \
+  --conf spark.sql.catalog.lake.uri=jdbc:postgresql://localhost:15432/iceberg_catalog \
+  --conf spark.sql.catalog.lake.jdbc.user=iceberg \
+  --conf spark.sql.catalog.lake.jdbc.password="$POSTGRES_ICEBERG_PASSWORD" \
+  --conf spark.sql.catalog.lake.warehouse=s3://hsec-lake/warehouse \
+  --conf spark.sql.catalog.lake.io-impl=org.apache.iceberg.aws.s3.S3FileIO \
+  --conf spark.sql.catalog.lake.s3.endpoint=http://localhost:19000 \
+  --conf spark.sql.catalog.lake.s3.path-style-access=true \
+  --conf spark.sql.catalog.lake.s3.access-key-id="$RUSTFS_ACCESS_KEY" \
+  --conf spark.sql.catalog.lake.s3.secret-access-key="$RUSTFS_SECRET_KEY" \
+  --conf spark.sql.catalog.lake.client.region=us-east-1 \
+  -f "$FILE"
+```
+
+- The catalog properties are the ones in [Catalog](#catalog), except two addresses. `uri` and `s3.endpoint` point to the local ends of the tunnels.
+- The table locations in the catalog stay `s3://hsec-lake/warehouse/...`. Only the client uses the local endpoint, so Flink and Spark in the cluster still find the files.
+- `--packages` gets the same jar versions as the `hsec-app-spark` image. The first run downloads them from Maven Central.
+- `kubectl port-forward` reaches the pods through the Kubernetes API, so the network policies do not block the tunnels.
 
 ## Intel GPU plugin
 
-Folder: `hsec-frigate/terraform/platform`.
+Folder: `terraform/010-workload`. The plugin is not an app, so the root creates it directly.
 
 - Translate the upstream DaemonSet `deployments/gpu_plugin/base/intel-gpu-plugin.yaml` from release v0.37.1 into a `kubernetes_daemon_set_v1` [3].
 - Keep the image `intel/intel-gpu-plugin:0.37.1` and the upstream host mounts.
@@ -230,7 +383,7 @@ Folder: `hsec-frigate/terraform/platform`.
 
 ## Frigate
 
-Folder: `hsec-frigate`.
+Folder: `hsec-app-frigate`.
 
 ### Compose to Kubernetes mapping
 
@@ -255,7 +408,7 @@ The source is the example Docker Compose file in the Frigate installation docs [
 
 ### Pod
 
-- Init container `seed-config`: uses the Frigate image and runs `[ -f /config/config.yml ] || cp /seed/config.yml /config/config.yml`. `/seed` is a ConfigMap that Terraform renders from `hsec-frigate/config.seed.yml.tftpl`.
+- Init container `seed-config`: uses the Frigate image and runs `[ -f /config/config.yml ] || cp /seed/config.yml /config/config.yml`. `/seed` is a ConfigMap that Terraform renders from `hsec-app-frigate/config.seed.yml.tftpl`.
 - Environment from the Secret `frigate-env`: `FRIGATE_RTSP_PASSWORD`, `FRIGATE_MQTT_USER`, `FRIGATE_MQTT_PASSWORD`.
 - Resources: CPU request 1, memory 3 GiB (request and limit), `gpu.intel.com/i915: 1`. Memory-backed volumes count toward the memory limit.
 - Startup probe: `GET /api/version` on port 5000, every 10 seconds, up to 60 failures. The first start downloads models and takes several minutes.
@@ -264,7 +417,7 @@ The source is the example Docker Compose file in the Frigate installation docs [
 
 ### Starting configuration
 
-`hsec-frigate/config.seed.yml.tftpl`:
+`hsec-app-frigate/config.seed.yml.tftpl`:
 
 ```yaml
 mqtt:
@@ -333,7 +486,7 @@ Rules:
 
 ## Mosquitto
 
-Folder: `hsec-mqtt`.
+Folder: `hsec-q-mqtt`.
 
 - Deployment with 1 replica and the `Recreate` strategy. Image `eclipse-mosquitto:2.1.2-alpine`.
 - PVC `mosquitto-data`, SSD class, 1 GiB, at `/mosquitto/data`.
@@ -341,7 +494,7 @@ Folder: `hsec-mqtt`.
 - Service `mosquitto`, type `ClusterIP`, port 1883.
 - Memory 64 MiB.
 
-The init container `make-passwd` uses the same image. It writes the password file to an `emptyDir` at `/mosquitto/auth`:
+The init container `make-passwd` uses the same image. It gets `MQTT_FRIGATE_PASSWORD` and `MQTT_BRIDGE_PASSWORD` from the Secret `mosquitto-env`. It writes the password file to an `emptyDir` at `/mosquitto/auth`:
 
 ```sh
 mosquitto_passwd -c -b /mosquitto/auth/passwd frigate "$MQTT_FRIGATE_PASSWORD"
@@ -350,7 +503,7 @@ chown 1883:1883 /mosquitto/auth/passwd
 chmod 0700 /mosquitto/auth/passwd
 ```
 
-`hsec-mqtt/mosquitto.conf`:
+`hsec-q-mqtt/mosquitto.conf`:
 
 ```text
 listener 1883
@@ -363,7 +516,7 @@ autosave_interval 60
 max_queued_messages 10000
 ```
 
-`hsec-mqtt/acl`:
+`hsec-q-mqtt/acl`:
 
 ```text
 user frigate
@@ -393,7 +546,7 @@ topic read frigate/notifications/+
 
 ## Redpanda
 
-Folder: `hsec-redpanda`.
+Folder: `hsec-q-redpanda`.
 
 ### Chart
 
@@ -487,14 +640,16 @@ A camera message without a camera or a time goes to `hsec.rejected`. For example
 
 ## Redpanda Connect bridge
 
-Folder: `hsec-redpanda`.
+Folder: `hsec-conn-mqtt`.
 
-- Deployment with 1 replica. Image `docker.redpanda.com/redpandadata/connect:4.112.0`.
+- Deployment with 1 replica and the `Recreate` strategy. Image `docker.redpanda.com/redpandadata/connect:4.112.0`. With `Recreate`, the old pod stops before the new pod starts. Two bridge pods with the same MQTT client ID make Mosquitto disconnect one of them, so messages in progress can be lost.
 - The ConfigMap `bridge-pipeline` holds `frigate-to-redpanda.yaml`. The container runs with the arguments `run /config/frigate-to-redpanda.yaml`.
+- Probes on the Redpanda Connect HTTP server, port 4195 (the default address): liveness `GET /ping`, readiness `GET /ready`. `/ready` answers 200 after the input and the output connect.
+- The pod template has the annotation `checksum/pipeline` with the SHA-256 of the pipeline file. A change to the file changes only the ConfigMap, and Kubernetes does not restart the pod for that. So the new hash makes `terraform apply` restart the pod.
 - Environment from the Secret `bridge-env`: `MQTT_BRIDGE_USER`, `MQTT_BRIDGE_PASSWORD`.
 - Memory 128 MiB.
 
-`hsec-redpanda/connect/frigate-to-redpanda.yaml`:
+`hsec-conn-mqtt/connect/frigate-to-redpanda.yaml`:
 
 ```yaml
 input:
@@ -565,7 +720,7 @@ Use only certified components. Do not use `redpanda_common`, because it needs an
 
 ## Flink
 
-Folder: `hsec-flink`.
+Folder: `hsec-app-flink`.
 
 ### Operator
 
@@ -581,7 +736,7 @@ The chart creates the service account `flink` in `hsec`.
 
 ### Job deployment
 
-`kubernetes_manifest` with this FlinkDeployment:
+The local Helm chart `hsec-app-flink/terraform/chart/` holds this FlinkDeployment. The module installs it with `helm_release` and `depends_on` on the operator release. It passes the image, the RustFS keys, and `job.properties` as chart values. It reads the keys from the Secret `rustfs-root` with the data source `kubernetes_secret_v1`. See [Roots](#roots).
 
 ```yaml
 apiVersion: flink.apache.org/v1beta1
@@ -590,7 +745,7 @@ metadata:
   name: hsec-stream
   namespace: hsec
 spec:
-  image: <registry>/hsec-flink:<tag>
+  image: <registry>/hsec-app-flink:<tag>
   flinkVersion: v2_2
   serviceAccount: flink
   flinkConfiguration:
@@ -787,15 +942,16 @@ An asynchronous step downloads the files for each alert request [32].
   - Each of these gives a null field: a timeout, an HTTP error, an image above 1 MiB, and a clip above 19 MiB. The message still goes out.
   - Each message has the `video` field and the three `video_*` headers.
 - Visit tests: two people with a 3-minute gap give one visit. A 6-minute gap gives two visits.
+- The tests create their Iceberg test tables in Java code, with the columns, partitions, and sort orders of `hsec-db-iceberg/migrations/`.
 - Pipeline test: a Flink MiniCluster with test sources and Iceberg tables on a temporary local folder. It includes one alert review with a 5 MB clip part, and it makes sure that the bytes in the `alerts` table equal the input.
 
 ## Iceberg
 
-Folder: `hsec-iceberg`, for the Postgres catalog only. The table schemas are code in `hsec-flink`, because the Flink job creates the tables.
+Folder: `hsec-db-iceberg`. It holds the Postgres catalog and the table migrations. See [Iceberg migrations](#iceberg-migrations).
 
 ### Catalog
 
-Flink and Spark use the same catalog properties. Both jobs read the passwords from environment variables.
+Flink, Spark, and the Iceberg migrations use the same catalog properties. All three read the passwords from environment variables. The migrations change only the two addresses. See [Iceberg migrations](#iceberg-migrations).
 
 | Property | Value |
 | --- | --- |
@@ -827,7 +983,7 @@ All seven tables are in the namespace `hsec` and share these properties:
 | Partition | `day(event_ts)` | One partition per UTC day |
 | Sort order | `camera`, then `event_ts` | Used by the nightly compaction |
 
-Set these values explicitly in each table definition, so that a future change of the defaults does not change the tables.
+The migrations set these values explicitly in each `CREATE TABLE`, so that a future change of the defaults does not change the tables.
 
 `events` (one row per `frigate/events` message):
 
@@ -914,7 +1070,7 @@ Retention math:
 
 ## RustFS
 
-Folder: `hsec-rustfs`.
+Folder: `hsec-db-rustfs`.
 
 `helm_release` of the chart `rustfs` 1.0.1 from `https://charts.rustfs.com`. The chart default is a distributed cluster with 4 pods [21]. Change these values:
 
@@ -942,7 +1098,7 @@ done
 
 ## Postgres
 
-Folder: `hsec-iceberg`.
+Folder: `hsec-db-iceberg`.
 
 - StatefulSet with 1 replica. Image `postgres:18.6-alpine`.
 - PVC `postgres-data`, SSD class, 2 GiB, mounted at `/var/lib/postgresql`. Postgres 18 images keep the data under this path, not under `/var/lib/postgresql/data` [22].
@@ -953,7 +1109,7 @@ Folder: `hsec-iceberg`.
 
 ## Spark
 
-Folder: `hsec-spark`.
+Folder: `hsec-app-spark`.
 
 ### Operator
 
@@ -969,7 +1125,7 @@ The chart creates a service account for Spark pods in `hsec`. The job uses it.
 
 ### Job deployment
 
-`kubernetes_manifest` with this ScheduledSparkApplication [23]:
+The local Helm chart `hsec-app-spark/terraform/chart/` holds this ScheduledSparkApplication [23]. The module installs it with `helm_release` and `depends_on` on the operator release, and passes the image and the time zone as chart values. See [Roots](#roots).
 
 ```yaml
 apiVersion: sparkoperator.k8s.io/v1beta2
@@ -984,10 +1140,11 @@ spec:
   successfulRunHistoryLimit: 3
   failedRunHistoryLimit: 3
   template:
-    type: Python
+    type: Java
     mode: cluster
-    image: <registry>/hsec-spark:<tag>
-    mainApplicationFile: local:///opt/hsec/jobs/batch.py
+    image: <registry>/hsec-app-spark:<tag>
+    mainClass: hsec.batch.BatchJob
+    mainApplicationFile: local:///opt/hsec/hsec-batch.jar
     sparkVersion: 4.0.4
     restartPolicy:
       type: Never
@@ -1037,7 +1194,7 @@ Each row gets `version`, the run start time in milliseconds. ClickHouse keeps on
 
 ### Tests
 
-- pytest with a local Spark session. The tests import the transform functions from `hsec_batch`. They do not copy them.
+- JUnit 5 tests with a local SparkSession. The tests call the transform classes from `src/main/java`. They do not copy them.
 - Each transform has its own tests with mock rows:
   - The newest name wins.
   - The face flag.
@@ -1051,16 +1208,17 @@ Each row gets `version`, the run start time in milliseconds. ClickHouse keeps on
 
 ## ClickHouse
 
-Folder: `hsec-clickhouse`.
+Folder: `hsec-db-clickhouse`.
 
 ### Server
 
 - StatefulSet with 1 replica. Image `clickhouse/clickhouse-server:26.3.39.7` (LTS).
 - PVC `clickhouse-data`, HDD class, 5 GiB, at `/var/lib/clickhouse`.
 - Service `clickhouse`, type `ClusterIP`, ports 8123 (HTTP) and 9000 (native).
+- Environment `CLICKHOUSE_DB=hsec`. At the first start, the image creates the database `hsec` [39]. The migrations need it. See [ClickHouse migrations](#clickhouse-migrations).
 - Memory 1.5 GiB. No ClickHouse Keeper, because no table uses replication.
 
-`hsec-clickhouse/config.d/hsec.xml`:
+`hsec-db-clickhouse/config.d/hsec.xml`:
 
 ```xml
 <clickhouse>
@@ -1089,12 +1247,12 @@ Terraform fills `timezone` from `var.timezone`. The system log tables otherwise 
 
 ### Users
 
-`hsec-clickhouse/users.d/hsec.xml.tftpl` defines the users. Terraform renders it with `password_sha256_hex` values from the random passwords.
+`hsec-db-clickhouse/users.d/hsec.xml.tftpl` defines the users. Terraform renders it with `password_sha256_hex` values from the random passwords.
 
 | User | Access | Used by |
 | --- | --- | --- |
 | `default` | Only from `127.0.0.1` and `::1` | Nobody. Locked to local access. |
-| `hsec_admin` | All on `hsec.*` | Schema Job |
+| `hsec_admin` | All on `hsec.*` | ClickHouse migrations |
 | `spark_writer` | `SELECT` and `INSERT` on `hsec.*` | Spark |
 | `grafana_reader` | `SELECT` on `hsec.*`, read-only profile | Grafana |
 
@@ -1102,14 +1260,12 @@ The end-to-end test makes sure that the `spark_writer` grants are enough for the
 
 ### Tables
 
-The Job `clickhouse-schema` runs `hsec-clickhouse/schema.sql` with `hsec_admin`. The Job name includes a hash of the file, so a schema change starts a new Job. Each statement uses `IF NOT EXISTS`.
+`hsec-db-clickhouse/migrations/0001_init.up.sql` creates the five tables, and `0001_init.down.sql` drops them. See [ClickHouse migrations](#clickhouse-migrations).
 
 All tables use `ReplacingMergeTree(version)`, a daily partition, and a 29-day TTL with `ttl_only_drop_parts = 1`. ClickHouse then drops whole old partitions. Dashboards query with `FINAL`, so they see only the newest version of each row.
 
 ```sql
-CREATE DATABASE IF NOT EXISTS hsec;
-
-CREATE TABLE IF NOT EXISTS hsec.objects
+CREATE TABLE hsec.objects
 (
     event_id    String,
     camera      LowCardinality(String),
@@ -1140,14 +1296,16 @@ SETTINGS ttl_only_drop_parts = 1;
 
 ## Discord notifier
 
-Folder: `hsec-redpanda`.
+Folder: `hsec-conn-discord`.
 
-- Deployment with 1 replica. Image `docker.redpanda.com/redpandadata/connect:4.112.0`.
+- Deployment with 1 replica and the `Recreate` strategy. Image `docker.redpanda.com/redpandadata/connect:4.112.0`. With `Recreate`, the old pod stops before the new pod starts. Two notifier pods in the same consumer group can post the same alert to Discord twice during a rebalance.
 - The ConfigMap `notifier-pipeline` holds `alerts-to-discord.yaml`. The container runs with the arguments `run /config/alerts-to-discord.yaml`.
+- Probes on the Redpanda Connect HTTP server, port 4195 (the default address): liveness `GET /ping`, readiness `GET /ready`. `/ready` answers 200 after the input and the output connect.
+- The pod template has the annotation `checksum/pipeline` with the SHA-256 of the pipeline file. A change to the file changes only the ConfigMap, and Kubernetes does not restart the pod for that. So the new hash makes `terraform apply` restart the pod.
 - Environment from the Secret `notifier-env`: `DISCORD_WEBHOOK_URL`. Environment `TZ = var.timezone`.
 - Memory 256 MiB. One message holds a file of up to 19 MiB, plus its base64 text and the upload body.
 
-`hsec-redpanda/connect/alerts-to-discord.yaml`:
+`hsec-conn-discord/connect/alerts-to-discord.yaml`:
 
 ```yaml
 input:
@@ -1231,11 +1389,11 @@ Unit tests with `rpk connect test` target the `to_discord` processor:
 
 ## Grafana setup
 
-Folder: `hsec-clickhouse`.
+Folder: `hsec-db-clickhouse`.
 
-The `apps` stage uses the `grafana/grafana` provider with `url = var.grafana_url` and `auth = var.grafana_auth`.
+The root `terraform/010-workload` configures the `grafana/grafana` provider with `url = var.grafana_url` and `auth = var.grafana_auth`. The `hsec-db-clickhouse` module creates the Grafana resources below.
 
-```hcl
+```terraform
 resource "grafana_data_source" "clickhouse" {
   type = "grafana-clickhouse-datasource"
   name = "hsec-clickhouse"
@@ -1254,7 +1412,7 @@ resource "grafana_data_source" "clickhouse" {
 
 The data source keys come from the provisioning example of the plugin [24].
 
-Terraform also creates the folder "Home security" and four dashboards from `hsec-clickhouse/grafana/dashboards/*.json`:
+Terraform also creates the folder "Home security" and four dashboards from `hsec-db-clickhouse/grafana/dashboards/*.json`:
 
 | Dashboard | Table | Panels |
 | --- | --- | --- |
@@ -1267,7 +1425,7 @@ Each dashboard refers to the data source by the UID `hsec-clickhouse`.
 
 ## Network policies
 
-Folder: `deploy/apps`.
+Folder: `terraform/010-workload`.
 
 The `hsec` namespace has a default policy that allows ingress only from pods in the same namespace. It selects every pod except Frigate, with the pod selector `app.kubernetes.io/name NotIn [frigate]`. Each service also needs its own password.
 
@@ -1290,13 +1448,16 @@ The k3s embedded network policy controller enforces these policies [25]. Egress 
 | Bridge pipeline | `rpk connect test` [26] | The 9 cases below |
 | Notifier pipeline | `rpk connect test` | See [Discord notifier](#discord-notifier) |
 | Flink job | JUnit 5, Flink test utilities, MiniCluster | See [Tests](#tests) in the Flink section |
-| Spark job | pytest | See [Tests](#tests-1) in the Spark section |
-| ClickHouse schema | `clickhouse local` | Every statement in `schema.sql` runs without an error. |
-| Terraform modules | `terraform fmt -check`, `terraform validate`, and `terraform test` with mock providers, in each `hsec-*/terraform` folder | The rendered Frigate configuration, the Secret wiring, the labels, and the module outputs |
-| Terraform roots | `terraform validate` and `terraform test` in `deploy/platform` and `deploy/apps` | The module wiring and the network policies |
+| Spark job | JUnit 5, local SparkSession | See [Tests](#tests-1) in the Spark section |
+| ClickHouse migrations | `clickhouse local` | After `CREATE DATABASE hsec`, each `.up.sql` file runs in order without an error. Then each `.down.sql` file runs in reverse order without an error. |
+| Iceberg migrations | `spark-sql` 4.0.4 in local mode with the same `--packages`, and a Hadoop catalog named `lake` on a temporary folder | Each `.up.sql` file runs in order without an error. A second run of `0001_init.up.sql` changes nothing. |
+| Iceberg migration script | `shellcheck` | `hsec-db-iceberg/migrate.sh` has no warnings. |
+| Terraform modules | `terraform fmt -check`, `terraform validate`, and `terraform test` with mock providers, in each `hsec-*/terraform` folder | The rendered Frigate configuration, the Secret names, the labels, and the `checksum/pipeline` annotations of the bridge and the notifier |
+| Terraform roots | `terraform validate` and `terraform test` in `terraform/010-workload` and `terraform/020-app` | The module calls, the Secrets, and the network policies |
+| Local job charts | `helm lint` and `helm template` in `hsec-app-flink/terraform/chart` and `hsec-app-spark/terraform/chart` | The rendered FlinkDeployment and ScheduledSparkApplication |
 | Whole system | `tests/smoke-test.sh` | See below |
 
-Bridge test cases. The tests run the real `route` processor from `hsec-redpanda/connect/frigate-to-redpanda.yaml`. Each input sets the `mqtt_topic` metadata.
+Bridge test cases. The tests run the real `route` processor from `hsec-conn-mqtt/connect/frigate-to-redpanda.yaml`. Each input sets the `mqtt_topic` metadata.
 
 | Case | Input | Expected result |
 | --- | --- | --- |
@@ -1328,48 +1489,58 @@ The smoke test does these steps:
 
 ```text
 home-security/
-├── deploy/
-│   ├── platform/                    # root: namespaces, calls the terraform/platform modules
-│   └── apps/                        # root: passwords, network policies, calls the terraform modules
-│       └── terraform.tfvars.example
-├── hsec-frigate/
+├── terraform/
+│   ├── 010-workload/                # root 1: namespaces, Intel GPU plugin, passwords, Secrets, network policies, data services
+│   │   └── README.md
+│   └── 020-app/                     # root 2: Frigate, bridge, notifier, Flink, Spark
+├── hsec-app-frigate/
+│   ├── README.md
 │   ├── config.seed.yml.tftpl
 │   └── terraform/
-│       ├── platform/                # Intel GPU plugin
 │       └── tests/
-├── hsec-mqtt/
+├── hsec-q-mqtt/
 │   ├── mosquitto.conf
 │   ├── acl
 │   └── terraform/
-├── hsec-redpanda/
+├── hsec-q-redpanda/
+│   └── terraform/                   # Redpanda and topics
+├── hsec-conn-mqtt/
 │   ├── connect/
 │   │   ├── frigate-to-redpanda.yaml
+│   │   └── tests/
+│   └── terraform/                   # bridge
+├── hsec-conn-discord/
+│   ├── connect/
 │   │   ├── alerts-to-discord.yaml
 │   │   └── tests/
+│   └── terraform/                   # notifier
+├── hsec-db-rustfs/
 │   └── terraform/
-├── hsec-rustfs/
-│   └── terraform/
-├── hsec-iceberg/
+├── hsec-db-iceberg/
+│   ├── migrations/
+│   │   └── 0001_init.up.sql         # namespace and the seven tables
+│   ├── migrate.sh                   # runs one migration with a local spark-sql
 │   └── terraform/                   # Postgres for the JDBC catalog
-├── hsec-flink/
+├── hsec-app-flink/
 │   ├── pom.xml
-│   ├── src/main/java/               # stream job, including the Iceberg table schemas
+│   ├── src/main/java/               # stream job
 │   ├── src/test/java/
 │   ├── Dockerfile
-│   └── terraform/
-│       └── platform/                # Flink operator
-├── hsec-spark/
-│   ├── pyproject.toml
-│   ├── hsec_batch/
-│   ├── jobs/batch.py
-│   ├── tests/
+│   └── terraform/                   # Flink operator and job
+│       └── chart/                   # local Helm chart of the FlinkDeployment
+├── hsec-app-spark/
+│   ├── pom.xml
+│   ├── src/main/java/               # batch job and transforms
+│   ├── src/test/java/
 │   ├── Dockerfile
-│   └── terraform/
-│       └── platform/                # Spark operator
-├── hsec-clickhouse/
+│   └── terraform/                   # Spark operator and job
+│       └── chart/                   # local Helm chart of the ScheduledSparkApplication
+├── hsec-db-clickhouse/
 │   ├── config.d/hsec.xml
 │   ├── users.d/hsec.xml.tftpl
-│   ├── schema.sql
+│   ├── migrations/
+│   │   ├── 0001_init.up.sql
+│   │   └── 0001_init.down.sql
 │   ├── grafana/dashboards/
 │   └── terraform/
 ├── tests/
@@ -1379,7 +1550,7 @@ home-security/
     └── specs.md
 ```
 
-Each `terraform/` folder also has a `tests/` folder. The tree shows it only once, under `hsec-frigate`.
+Each app folder and each root in `terraform/` has a `README.md`. Each `<app>/terraform` folder and each root also has a `tests/` folder. Each root also has a `terraform.tfvars.example`. The tree shows `README.md` only under `010-workload` and `hsec-app-frigate`, and `tests/` only under `hsec-app-frigate`.
 
 ## References
 
@@ -1454,3 +1625,13 @@ Each `terraform/` folder also has a `tests/` folder. The tree shows it only once
 [35] Frigate contributors, "`frigate/ffmpeg_presets.py`," GitHub. Accessed: Oct. 4, 2026. [Online]. Available: https://github.com/blakeblackshear/frigate/blob/master/frigate/ffmpeg_presets.py
 
 [36] Kubernetes, "Network Policies," Kubernetes Documentation. Accessed: Oct. 4, 2026. [Online]. Available: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+
+[37] golang-migrate contributors, "golang-migrate/migrate," GitHub. Accessed: Oct. 4, 2026. [Online]. Available: https://github.com/golang-migrate/migrate
+
+[38] golang-migrate contributors, "ClickHouse driver," GitHub. Accessed: Oct. 4, 2026. [Online]. Available: https://github.com/golang-migrate/migrate/tree/master/database/clickhouse
+
+[39] ClickHouse, "clickhouse/clickhouse-server," Docker Hub. Accessed: Oct. 4, 2026. [Online]. Available: https://hub.docker.com/r/clickhouse/clickhouse-server
+
+[40] Apache Iceberg, "Spark Getting Started: Type compatibility," Apache Iceberg Documentation. Accessed: Oct. 4, 2026. [Online]. Available: https://iceberg.apache.org/docs/latest/spark-getting-started/#type-compatibility
+
+[41] Apache Iceberg, "Spark DDL," Apache Iceberg Documentation. Accessed: Oct. 4, 2026. [Online]. Available: https://iceberg.apache.org/docs/latest/spark-ddl/
