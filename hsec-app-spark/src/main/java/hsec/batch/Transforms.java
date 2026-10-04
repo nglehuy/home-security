@@ -1,5 +1,11 @@
 package hsec.batch;
 
+import java.sql.Timestamp;
+import java.time.LocalTime;
+
+import org.apache.spark.sql.Column;
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Row;
 import static org.apache.spark.sql.functions.array;
 import static org.apache.spark.sql.functions.array_distinct;
 import static org.apache.spark.sql.functions.array_sort;
@@ -7,6 +13,7 @@ import static org.apache.spark.sql.functions.avg;
 import static org.apache.spark.sql.functions.bool_or;
 import static org.apache.spark.sql.functions.coalesce;
 import static org.apache.spark.sql.functions.col;
+import static org.apache.spark.sql.functions.collect_list;
 import static org.apache.spark.sql.functions.count;
 import static org.apache.spark.sql.functions.date_trunc;
 import static org.apache.spark.sql.functions.explode_outer;
@@ -18,16 +25,9 @@ import static org.apache.spark.sql.functions.max_by;
 import static org.apache.spark.sql.functions.min;
 import static org.apache.spark.sql.functions.minute;
 import static org.apache.spark.sql.functions.not;
-import static org.apache.spark.sql.functions.collect_list;
 import static org.apache.spark.sql.functions.to_date;
 import static org.apache.spark.sql.functions.unix_micros;
 import static org.apache.spark.sql.functions.when;
-
-import java.sql.Timestamp;
-import java.time.LocalTime;
-import org.apache.spark.sql.Column;
-import org.apache.spark.sql.Dataset;
-import org.apache.spark.sql.Row;
 
 /**
  * Computes the five ClickHouse tables from the Iceberg tables. Each result has the

@@ -1,6 +1,7 @@
 package hsec.stream;
 
 import java.nio.charset.StandardCharsets;
+
 import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeaders;

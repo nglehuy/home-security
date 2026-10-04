@@ -1,14 +1,14 @@
 package hsec.stream;
 
-import static org.apache.iceberg.types.Types.NestedField.optional;
-
 import java.util.List;
 import java.util.Map;
+
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
+import static org.apache.iceberg.types.Types.NestedField.optional;
 
 /**
  * The seven Iceberg tables. The migrations in hsec-db-iceberg/migrations create them,

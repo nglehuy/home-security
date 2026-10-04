@@ -1,6 +1,7 @@
 package hsec.stream;
 
 import java.nio.charset.StandardCharsets;
+
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.connector.kafka.source.reader.deserializer.KafkaRecordDeserializationSchema;
 import org.apache.flink.util.Collector;

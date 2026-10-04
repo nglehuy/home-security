@@ -1,6 +1,7 @@
 package hsec.stream;
 
 import java.util.Locale;
+
 import org.apache.flink.table.data.TimestampData;
 
 /** Conversions for Frigate times, which are Unix seconds with a fraction. */
