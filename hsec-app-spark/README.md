@@ -45,6 +45,69 @@ flowchart TB
 - The job caches `objects`, `visits`, and `alerts`, because the five writes use them again.
 - The Spark Operator runs `spark-submit` as a JVM inside its controller pod. This is why the controller needs 512 MiB.
 
+## Architecture
+
+### Runtime
+
+A Spark application has one driver and one or more executors [3]. The driver plans the work, and the executors do it. An action, such as a write, starts a job. Spark splits each job into stages at each shuffle, and each stage into one task per partition [1], [3].
+
+```mermaid
+flowchart TB
+  subgraph DRV["Driver pod"]
+    SS["SparkSession<br/>catalogs lake and clickhouse"]
+    CAT["Catalyst<br/>logical plan to physical plan"]
+    DAG["DAG scheduler<br/>job to stages, split at each shuffle"]
+    TS["Task scheduler<br/>tasks to executors"]
+    SS --> CAT --> DAG --> TS
+  end
+  subgraph EX["Executor pod"]
+    TH["1 task thread on 1 core"]
+    BM["Block manager<br/>cached data and shuffle files"]
+    TH --> BM
+  end
+  TS -- "tasks" --> TH
+  TH -- "status and results" --> TS
+```
+
+| Part | Role |
+| --- | --- |
+| SparkSession | Holds the settings and the catalogs of the run. |
+| Catalyst | Turns the DataFrame steps into a physical plan. It pushes the column list and the filters down to the readers [2]. |
+| DAG scheduler | Turns a job into a graph of stages. Steps without a shuffle between them run in the same stage, one after the other on each partition [1]. |
+| Task scheduler | Sends the tasks of each stage to the executors, and sends a failed task again. |
+| Executor | Runs the tasks. Its block manager keeps the cached partitions and the shuffle files between stages. |
+
+One run does these steps:
+
+1. The driver reads the table metadata: from the Postgres catalog for the Iceberg tables, and from ClickHouse for the target tables.
+2. Each of the five writes is an action, so each write starts one job. On the first run after 03:00, the maintenance statements start more jobs before them.
+3. The first write computes `objects` and caches it in the executor. The later writes use the cached copy instead of reading Iceberg again.
+4. The executor reads the Parquet files from RustFS and writes the rows to ClickHouse over HTTP.
+
+### In the cluster
+
+```mermaid
+flowchart TB
+  TF["Terraform: helm_release hsec-batch"] --> SSA["ScheduledSparkApplication hsec-batch<br/>every 15 minutes, Forbid"]
+  SSA --> CTL["Spark Operator controller"]
+  CTL -- "creates for each run" --> SA["SparkApplication hsec-batch-ID"]
+  CTL -- "runs spark-submit inside its own pod" --> DP["Driver pod hsec-batch-ID-driver<br/>and its headless Service"]
+  WH["Spark Operator webhook"] -. "adds envFrom spark-env" .-> DP
+  DP -- "creates and connects" --> EP["Executor pod hsec-batch-ID-exec-1"]
+  WH -. "adds envFrom spark-env" .-> EP
+  DP -- "catalog metadata over JDBC" --> PG[("Postgres")]
+  EP -- "Parquet files over S3" --> S3[("RustFS")]
+  EP -- "rows over HTTP 8123" --> CH[("ClickHouse")]
+```
+
+1. Every 15 minutes, the controller creates a SparkApplication from the template of the ScheduledSparkApplication [5]. With `concurrencyPolicy: Forbid`, the controller skips a run while the last run is still active. So at most one run uses memory.
+2. For each SparkApplication, the controller runs `spark-submit`. `spark-submit` is a JVM that runs inside the controller pod, which is why the controller needs 512 MiB.
+3. `spark-submit` creates the driver pod. The driver creates the executor pod and connects to it [4]. A headless Service gives the driver a stable name for the executor.
+4. The webhook changes each pod before Kubernetes starts it, for example to add the environment variables from the Secret `spark-env`.
+5. When the run ends, the executor pod ends and Kubernetes deletes it. The driver pod stays in the state `Completed` with its log, and it uses no CPU or memory [4]. The operator keeps the last 3 successful runs and the last 3 failed runs.
+
+Each pod gets its JVM memory plus 384 MiB of memory overhead for everything outside the JVM heap. 384 MiB is the Spark default minimum [6]. So the driver pod gets 896 MiB, and the executor pod 1024 MiB.
+
 ## How it works
 
 ```mermaid
@@ -68,7 +131,7 @@ flowchart TB
   DAY --> CH
 ```
 
-1. The operator creates one run every 15 minutes. With `concurrencyPolicy: Forbid`, a run waits while the last run is still active, so the memory budget holds.
+1. The operator creates one run every 15 minutes. With `concurrencyPolicy: Forbid`, the operator skips a run while the last run is still active, so the memory budget holds.
 2. The run builds two catalogs: `lake` (Iceberg, through the JDBC catalog in Postgres) and `clickhouse` (the ClickHouse Spark connector over HTTP).
 3. The first run at or after 03:00 local time does the nightly maintenance first.
 4. The run reads the Iceberg rows from local midnight of yesterday, so the window is 24 to 48 hours long. It never reads the `image` and `clip` columns of `alerts`.
@@ -210,3 +273,5 @@ See [Spark](../docs/specs.md#spark) and [Retention and maintenance](../docs/spec
 [4] Apache Spark, "Running Spark on Kubernetes," Spark 4.0.0 Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://spark.apache.org/docs/4.0.0/running-on-kubernetes.html
 
 [5] Kubeflow, "Spark Operator: Overview," Kubeflow Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://www.kubeflow.org/docs/components/spark-operator/overview/
+
+[6] Apache Spark, "Spark Configuration," Spark 4.0.0 Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://spark.apache.org/docs/4.0.0/configuration.html

@@ -47,6 +47,84 @@ flowchart TB
 - The media downloads use ordered async I/O, so message 1 of a review always leaves before its clip parts. See [Alerts](#alerts).
 - The Flink Kubernetes Operator runs the job from the FlinkDeployment. With `upgradeMode: last-state`, an upgrade continues from the latest checkpoint [9].
 
+## Architecture
+
+### Runtime
+
+A Flink cluster has two kinds of processes [2]. The JobManager coordinates the job, and the TaskManagers run it. This job runs in application mode: the JobManager runs the `main` method of `hsec-stream.jar` from the image, and builds the job graph from it [10].
+
+```mermaid
+flowchart TB
+  subgraph JM["JobManager pod"]
+    DISP["Dispatcher<br/>REST API and web UI on port 8081"]
+    JMA["JobMaster of hsec-stream<br/>deploys tasks and triggers checkpoints"]
+    RM["ResourceManager<br/>manages the task slots"]
+    DISP -- "starts" --> JMA
+    JMA -- "asks for a slot" --> RM
+  end
+  RM -- "native Kubernetes: create a pod" --> K8S["Kubernetes API"]
+  K8S -- "starts" --> SLOT
+  subgraph TM["TaskManager pod"]
+    SLOT["Task slot 1<br/>runs all four tasks of the job"]
+  end
+  JMA -- "deploys tasks, sends checkpoint barriers" --> SLOT
+  SLOT -- "state and Kafka offsets" --> CP[("RustFS: s3://hsec-flink/checkpoints")]
+  JMA -- "writes the job metadata" --> HA[("RustFS: s3://hsec-flink/ha")]
+  JMA -- "writes the pointer" --> CM["HA ConfigMaps"]
+  CM -. "points to" .-> HA
+```
+
+| Part | Role |
+| --- | --- |
+| Dispatcher | Offers the REST API and the web UI. It starts a JobMaster for each job [2]. |
+| JobMaster | Runs one job. It deploys the tasks, triggers the checkpoints, and restarts the tasks after a failure [2]. |
+| ResourceManager | Manages the task slots. With native Kubernetes, it creates a TaskManager pod for the slots that the job needs. It removes the pod after the job stops using it [10]. |
+| TaskManager | A worker process. It runs the tasks, and buffers and exchanges the data between them [2]. |
+| Task slot | A fixed share of the resources of a TaskManager. With slot sharing, one slot runs one parallel copy of every task of a job [2]. |
+| Kubernetes HA | Keeps the job metadata in `high-availability.storageDir`, and only a pointer to it in ConfigMaps. A new JobManager uses the pointer to find the latest checkpoint [11]. |
+
+### Job graph at run time
+
+Flink chains operators into tasks, and each task runs in one thread [2]. The job has parallelism 1, so the one slot runs these four tasks. Each arrow is a data exchange: Flink sends each record to the task that owns its key.
+
+```mermaid
+flowchart TB
+  T1["Task 1<br/>Kafka source, then Parse"]
+  T2["Task 2<br/>Deduplicate, then the 5 raw table writers and committers,<br/>then the split into events and reviews"]
+  T3["Task 3<br/>Visits, then the visits writer and committer"]
+  T4["Task 4<br/>Alerts, then Alert media, then the hsec.alerts writer,<br/>and the alerts table writer and committer"]
+  T1 -- "keyed by message ID" --> T2
+  T2 -- "person events, keyed by camera" --> T3
+  T2 -- "events and reviews, keyed by camera" --> T4
+```
+
+Each Iceberg sink has two operators. The writer writes Parquet files all the time. The committer commits the files of a checkpoint to the table after that checkpoint completes.
+
+### In the cluster
+
+```mermaid
+flowchart TB
+  TF["Terraform: helm_release hsec-stream"] --> FD["FlinkDeployment hsec-stream"]
+  OP["Flink Kubernetes Operator pod"] -- "observe, validate, reconcile" --> FD
+  OP -- "creates" --> JMD["Deployment hsec-stream<br/>JobManager pod"]
+  OP -- "reads the job state" --> REST["Service hsec-stream-rest<br/>port 8081"]
+  REST --> JMD
+  JMD -- "creates on demand" --> TMP["Pod hsec-stream-taskmanager-1-1"]
+  TMP --> RP[("Redpanda: frigate.* and hsec.alerts")]
+  TMP --> FAPI["Frigate API: frigate-api:5000"]
+  TMP --> LAKE[("Iceberg: Postgres catalog and RustFS")]
+```
+
+1. Terraform installs the local chart, which holds the FlinkDeployment `hsec-stream`.
+2. The operator runs a control loop on it. It observes the job through the Flink REST API and the Kubernetes API, makes sure that the spec is valid, and reconciles the difference [12].
+3. On the first run, the operator starts the JobManager through the native Kubernetes integration. The JobManager then starts the TaskManager pod by itself [10], [12].
+4. When the FlinkDeployment changes, for example with a new image tag, the operator upgrades the job. With `upgradeMode: last-state`, the new job continues from the latest checkpoint in the HA metadata [9].
+5. If you delete the FlinkDeployment, the HA ConfigMaps stay, because they have no owner reference. A new FlinkDeployment with the same name recovers the job from them [11].
+
+The JobManager pod gets 768 MiB, and the TaskManager pod 1536 MiB. Flink splits the TaskManager memory into the JVM heap, network buffers, managed memory, and JVM overhead. Only RocksDB uses managed memory, so the job sets its share to 5 % and leaves more heap for the state.
+
+To open the Flink web UI, run `kubectl -n hsec port-forward svc/hsec-stream-rest 8081`, then open `http://localhost:8081`.
+
 ## How it works
 
 ```mermaid
@@ -229,3 +307,9 @@ See [Flink](../docs/specs.md#flink), [Alerts](../docs/specs.md#alerts), and [Ale
 [8] Apache Flink, "Async I/O," Flink 2.2 Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://nightlies.apache.org/flink/flink-docs-release-2.2/docs/dev/datastream/operators/asyncio/
 
 [9] Apache Flink, "Job Management," Flink Kubernetes Operator 1.16 Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://nightlies.apache.org/flink/flink-kubernetes-operator-docs-release-1.16/docs/managing/job-management/
+
+[10] Apache Flink, "Native Kubernetes," Flink 2.2 Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://nightlies.apache.org/flink/flink-docs-release-2.2/docs/deployment/resource-providers/native_kubernetes/
+
+[11] Apache Flink, "Kubernetes HA Services," Flink 2.2 Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://nightlies.apache.org/flink/flink-docs-release-2.2/docs/deployment/ha/kubernetes_ha/
+
+[12] Apache Flink, "Architecture," Flink Kubernetes Operator 1.16 Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://nightlies.apache.org/flink/flink-kubernetes-operator-docs-release-1.16/docs/concepts/architecture/

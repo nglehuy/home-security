@@ -1169,7 +1169,7 @@ spec:
             name: spark-env
 ```
 
-- `concurrencyPolicy: Forbid`: never more than one Spark run, so the memory budget holds. If the nightly run takes longer than 15 minutes, the next run waits.
+- `concurrencyPolicy: Forbid`: never more than one Spark run, so the memory budget holds. If the nightly run takes longer than 15 minutes, the operator skips the next run.
 - The Secret `spark-env` holds the Postgres password, the RustFS keys, and the ClickHouse `spark_writer` password. The job builds its catalogs from these variables, so no password is in the manifest.
 - Terraform fills `timeZone` from `var.timezone`.
 

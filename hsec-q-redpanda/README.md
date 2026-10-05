@@ -42,6 +42,71 @@ Redpanda differs from Apache Kafka in how it runs, not in the protocol. It is on
 - Two consumer groups read the topics: `hsec-stream` (Flink) and `hsec-discord-notifier` (the notifier). Flink restores its exact position from its own checkpoint, and its committed offsets only help the first start.
 - The record headers carry the video reference of each camera message. See [How it works](#how-it-works).
 
+## Architecture
+
+### Broker
+
+Redpanda is one C++ program, built on the Seastar framework [2], [6]. It uses a thread-per-core model: it pins one thread to each CPU core, and the threads talk to each other only by message passing [2]. It allocates its memory up front, splits it between the cores, and writes to disk with direct memory access (DMA) [2].
+
+```mermaid
+flowchart TB
+  CL["Kafka clients: bridge, Flink, notifier"] -- "Kafka API, port 9093" --> K
+  ADM["rpk, the chart Jobs, and the sidecar"] -- "Admin API, port 9644" --> A
+  subgraph BRK["Broker redpanda-0 on one core"]
+    K["Kafka API"] --> SH["Shard of core 0<br/>owns all partitions and 2048 MiB"]
+    A["Admin API"] --> SH
+    SH --> RG["One Raft group per partition<br/>this broker leads all of them"]
+    SH --> CTRL["Controller partition<br/>topics, settings, and users"]
+  end
+  RG --> SEG[("Log segments on PVC datadir-redpanda-0")]
+  CTRL --> SEG
+```
+
+| Part | Role |
+| --- | --- |
+| Seastar | A C++ framework for thread-per-core servers with asynchronous I/O [6]. |
+| Shard | One core, with its thread and its share of memory. Each partition belongs to one shard. |
+| Raft group | Each partition is a Raft group with one elected leader and zero or more followers. The leader takes the writes and copies them to the followers [2], [4]. |
+| Controller partition | A system partition that stores the metadata commands, such as creating a topic or a user. It takes the place of ZooKeeper in Apache Kafka [2]. |
+| Kafka API | The protocol of the producers and consumers [2]. |
+| Admin API | An HTTP API for the cluster settings and the broker health. `rpk` and the chart use it. |
+| HTTP Proxy and Schema Registry | Two more HTTP APIs in the same program, on ports 8082 and 8081. This project does not use them. |
+
+The chart gives 80 % of the container memory to Redpanda [7]. So in the 2.5 GiB pod, Redpanda runs with `--smp=1` (one core), `--memory=2048M`, and `--reserve-memory=205M`. With one broker, each Raft group has a leader and no followers.
+
+### In the cluster
+
+```mermaid
+flowchart TB
+  TF["Terraform: helm_release redpanda"] --> STS["StatefulSet redpanda"]
+  STS --> I1
+  subgraph POD["Pod redpanda-0"]
+    I1["Init 1: tuning<br/>rpk redpanda tune all, privileged"] --> I2["Init 2: redpanda-configurator<br/>settings of this broker"]
+    I2 --> I3["Init 3: bootstrap-yaml-envsubst<br/>cluster settings for the first start"]
+    I3 --> RPC["Container redpanda"]
+    SIDE["Container sidecar<br/>broker probe and settings watcher"]
+  end
+  RPC --> PVC[("PVC datadir-redpanda-0, SSD 10 GiB")]
+  SVC["Headless Service redpanda"] --> RPC
+  JOB1["Job redpanda-configuration<br/>after each install and upgrade"] -- "cluster settings" --> SVC
+  JOB2["Job redpanda-topics-HASH<br/>topics.sh"] -- "topics" --> SVC
+```
+
+1. The init container `tuning` runs `rpk redpanda tune all` in privileged mode. `rpk` runs only the tuners that are on, and the chart turns on only `rpk.tune_aio_events` [8]. This tuner raises the number of asynchronous I/O requests that the kernel allows. It changes a setting of the whole Fedora host, not only of the pod.
+2. The init container `redpanda-configurator` writes the settings of this broker, such as its addresses.
+3. The init container `bootstrap-yaml-envsubst` writes the cluster settings for the first start.
+4. The container `sidecar` checks the health of the broker through the Admin API, and watches the settings.
+5. After each install and upgrade, the Job `redpanda-configuration` syncs the cluster settings, for example `auto_create_topics_enabled: false`.
+6. The Service `redpanda` is headless: it has no cluster IP, and each pod gets its own DNS name. Clients use `redpanda-0.redpanda.hsec.svc.cluster.local`, the stable name of the StatefulSet pod.
+
+| Port | Name | Use |
+| --- | --- | --- |
+| 9093 | `kafka` | Kafka API inside the cluster |
+| 9644 | `admin` | Admin API |
+| 8082 | `http` | HTTP Proxy, not used |
+| 8081 | `schemaregistry` | Schema Registry, not used |
+| 33145 | `rpc` | Raft traffic between brokers |
+
 ## How it works
 
 ```mermaid
@@ -157,3 +222,9 @@ See [Redpanda](../docs/specs.md#redpanda) and [Message contract](../docs/specs.m
 [4] D. Ongaro and J. Ousterhout, "In search of an understandable consensus algorithm," in Proc. USENIX Annu. Tech. Conf. (ATC), Philadelphia, PA, USA, 2014, pp. 305–319. [Online]. Available: https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro
 
 [5] Redpanda Data, "Consumer Offsets," Redpanda Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://docs.redpanda.com/current/develop/consume-data/consumer-offsets/
+
+[6] ScyllaDB, "Seastar," Seastar Project. Accessed: Oct. 5, 2026. [Online]. Available: https://seastar.io/
+
+[7] Redpanda Data, "Redpanda Helm Chart Specification," Redpanda Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://docs.redpanda.com/current/reference/k-redpanda-helm-spec/
+
+[8] Redpanda Data, "rpk redpanda tune," Redpanda Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://docs.redpanda.com/current/reference/rpk/rpk-redpanda/rpk-redpanda-tune/
