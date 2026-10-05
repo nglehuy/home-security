@@ -155,6 +155,16 @@ class MediaFunctionTest {
     }
 
     @Test
+    void timesArePlainDecimals() throws Exception {
+        String start = new String(run(new FakeFrigate(null, null), start("e1")).toJson(), StandardCharsets.UTF_8);
+        assertThat(start).contains("\"review_start\":1718987129.308396")
+                .contains("\"video\":{\"camera\":\"front_cam\",\"from\":1718987129.308396,\"to\":1718987129.308396}")
+                .doesNotContain("E9");
+        String clip = new String(run(new FakeFrigate(null, null), clip()).toJson(), StandardCharsets.UTF_8);
+        assertThat(clip).contains("\"from\":1718987154.308396,\"to\":1718987179.308396");
+    }
+
+    @Test
     void timeoutSendsTheMessageWithoutTheFile() throws Exception {
         MediaFunction fn = new MediaFunction(new FakeFrigate(null, null), CONFIG);
         Capture c = new Capture();

@@ -28,8 +28,10 @@ Do not commit `terraform.tfvars`, because it holds secret values. [Secrets](../.
 
 - Cluster: `kubeconfig_path`, `kube_context`, `namespace`, `node_name`.
 - Storage and time: `ssd_storage_class`, `hdd_storage_class`, `timezone`.
-- Grafana: `grafana_url`, `grafana_namespace`.
-- Sensitive: `discord_webhook_url`, `frigate_rtsp_password`, `grafana_auth`.
+- Grafana, optional: `grafana_namespace`. If you set it, a network policy lets the Grafana pods reach ClickHouse on port 8123.
+- Sensitive: `discord_webhook_url`, `frigate_rtsp_password`.
+
+The Grafana data source and dashboards are not part of this root yet.
 
 ## State
 

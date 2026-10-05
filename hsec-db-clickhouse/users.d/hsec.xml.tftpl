@@ -38,8 +38,9 @@
       <quota>default</quota>
       <grants>
         <query>GRANT SELECT, INSERT ON hsec.*</query>
-        <!-- The ClickHouse Spark connector reads the cluster list before each write. -->
+        <!-- The ClickHouse Spark connector reads the cluster list and the macros before each write. -->
         <query>GRANT SELECT ON system.clusters</query>
+        <query>GRANT SELECT ON system.macros</query>
       </grants>
     </spark_writer>
 

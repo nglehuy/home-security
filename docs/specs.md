@@ -98,10 +98,12 @@ Rules for the app folders:
 Rules for the README files:
 
 - Each app folder and each root in `terraform/` has a `README.md`.
-- The README of an app says what the service does, how Terraform deploys it, what its files are, and how to test it.
+- The README of an app documents its service in detail. It has these parts: what it does, a mermaid diagram (`flowchart TB`) of how it works, and its configuration.
+- It also has its Kubernetes objects, its file tree, how to deploy it, and how to test it.
+- The README of a database app (`hsec-db-*` and `hsec-q-*`) also explains what it stores and how: tables, topics, buckets, retention, users, and migrations.
 - The README of a root lists its contents, the steps before and during the apply, its variables, and its state.
-- Each README links to its sections in this file. This file stays the only source of the details, so a README does not copy them.
-- If you change a section of this file, update the README that links to it.
+- Each README links to its sections in this file.
+- This file holds the design. The README holds the facts of the code. If you change one of them, update the other in the same change.
 
 ## Terraform
 

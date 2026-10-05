@@ -1,5 +1,6 @@
 package hsec.stream;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -84,7 +85,7 @@ public class AlertMessage {
             strings(n.putArray("sub_labels"), subLabels);
             strings(n.putArray("zones"), zones);
         }
-        n.put("review_start", reviewStart);
+        n.put("review_start", plain(reviewStart));
         if (AlertRequest.START.equals(kind)) {
             n.put("event_id", eventId);
             n.put("fired_ts", firedTs);
@@ -94,8 +95,8 @@ public class AlertMessage {
         }
         ObjectNode v = n.putObject("video");
         v.put("camera", camera);
-        v.put("from", videoFrom);
-        v.put("to", videoTo);
+        v.put("from", plain(videoFrom));
+        v.put("to", plain(videoTo));
         if (AlertRequest.START.equals(kind)) {
             n.put("snapshot_url", snapshotUrl);
             n.put("image_jpeg", imageJpeg == null ? null : Base64.getEncoder().encodeToString(imageJpeg));
@@ -108,6 +109,11 @@ public class AlertMessage {
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** Unix seconds as a plain decimal with 6 places. A double would print as 1.7E9. */
+    private static BigDecimal plain(double seconds) {
+        return new BigDecimal(Times.format(seconds));
     }
 
     private static void strings(ArrayNode a, String[] values) {

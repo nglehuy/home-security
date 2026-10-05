@@ -1,0 +1,26 @@
+# Copy to terraform.tfvars and fill in the values. Do not commit terraform.tfvars.
+# Use the same registry and tags as the images that you pushed.
+
+kube_context      = "default"
+ssd_storage_class = "local-ssd"
+hdd_storage_class = "local-hdd"
+
+image_registry  = "registry.lan:5000"
+flink_image_tag = "1.0.0"
+spark_image_tag = "1.0.0"
+
+frigate_url = "https://192.168.1.17:8971"
+
+# Frigate replaces {FRIGATE_RTSP_PASSWORD} with the camera password from
+# frigate_rtsp_password in terraform/010-workload.
+cameras = {
+  front_door = {
+    detect_url    = "rtsp://admin:{FRIGATE_RTSP_PASSWORD}@192.168.1.20:554/stream2"
+    record_url    = "rtsp://admin:{FRIGATE_RTSP_PASSWORD}@192.168.1.20:554/stream1"
+    detect_width  = 640
+    detect_height = 360
+  }
+}
+
+# Optional. Defaults: kubeconfig_path = "~/.kube/config", namespace = "hsec",
+# timezone = "Asia/Singapore", night_start = "23:00", night_end = "06:00".

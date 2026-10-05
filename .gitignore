@@ -90,3 +90,7 @@ override.tf.json
 terraform.rc
 
 # End of https://www.toptal.com/developers/gitignore/api/terraform,maven,java
+
+# Commit .terraform.lock.hcl only for the roots in terraform/. The app modules
+# get one from "terraform init" for their tests.
+hsec-*/terraform/.terraform.lock.hcl

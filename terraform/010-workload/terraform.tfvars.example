@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and fill in the values. Do not commit terraform.tfvars.
+# You can also set each value as a TF_VAR_<name> environment variable.
+
+kube_context      = "default"
+node_name         = "vostro"
+ssd_storage_class = "local-ssd"
+hdd_storage_class = "local-hdd"
+
+# Optional. Defaults: kubeconfig_path = "~/.kube/config", namespace = "hsec",
+# timezone = "Asia/Singapore", grafana_namespace = null.
+# grafana_namespace = "monitoring"
+
+# Sensitive.
+discord_webhook_url   = "https://discord.com/api/webhooks/<id>/<token>"
+frigate_rtsp_password = "<camera password>"

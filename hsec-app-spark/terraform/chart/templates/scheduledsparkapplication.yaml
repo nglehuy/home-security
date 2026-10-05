@@ -1,0 +1,70 @@
+{{- $ns := .Release.Namespace -}}
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: hsec-batch
+  namespace: {{ $ns }}
+  labels:
+    {{- with .Values.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    app.kubernetes.io/name: hsec-batch
+spec:
+  schedule: "*/15 * * * *"
+  timeZone: {{ .Values.timezone | quote }}
+  # Never more than one run, so the memory budget holds.
+  concurrencyPolicy: Forbid
+  successfulRunHistoryLimit: 3
+  failedRunHistoryLimit: 3
+  template:
+    type: Java
+    mode: cluster
+    image: {{ required "image is required" .Values.image | quote }}
+    mainClass: hsec.batch.BatchJob
+    mainApplicationFile: local:///opt/hsec/hsec-batch.jar
+    sparkVersion: 4.0.4
+    arguments:
+      - --timezone
+      - {{ .Values.timezone | quote }}
+      - --night-start
+      - {{ .Values.nightStart | quote }}
+      - --night-end
+      - {{ .Values.nightEnd | quote }}
+      - --catalog-uri
+      - jdbc:postgresql://postgres.{{ $ns }}.svc.cluster.local:5432/iceberg_catalog
+      - --warehouse
+      - s3://hsec-lake/warehouse
+      - --s3-endpoint
+      - http://rustfs-svc.{{ $ns }}.svc.cluster.local:9000
+      - --clickhouse-host
+      - clickhouse.{{ $ns }}.svc.cluster.local
+    restartPolicy:
+      type: Never
+    driver:
+      cores: 1
+      coreRequest: 250m
+      memory: 512m
+      memoryOverhead: 384m
+      serviceAccount: {{ .Values.serviceAccount }}
+      labels:
+        {{- with .Values.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        app.kubernetes.io/name: hsec-batch
+      envFrom:
+        - secretRef:
+            name: {{ .Values.envSecret }}
+    executor:
+      instances: 1
+      cores: 1
+      coreRequest: 500m
+      memory: 640m
+      memoryOverhead: 384m
+      labels:
+        {{- with .Values.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        app.kubernetes.io/name: hsec-batch
+      envFrom:
+        - secretRef:
+            name: {{ .Values.envSecret }}

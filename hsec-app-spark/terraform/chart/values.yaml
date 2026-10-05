@@ -1,0 +1,13 @@
+# Image of the job, for example <registry>/hsec-app-spark:<tag>.
+image: ""
+# Local time zone of the schedule and of the stats.
+timezone: Asia/Singapore
+# Night window for the day and night stats.
+nightStart: "23:00"
+nightEnd: "06:00"
+# Secret with POSTGRES_ICEBERG_PASSWORD, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY,
+# and CLICKHOUSE_SPARK_PASSWORD.
+envSecret: spark-env
+# Service account that the Spark operator chart creates for Spark pods.
+serviceAccount: spark-operator-spark
+labels: {}
