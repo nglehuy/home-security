@@ -23,11 +23,16 @@ public final class StreamJob {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
         // Start from the committed offsets, or from the earliest offset on the first run.
+        // kafka-clients 4.x deprecates OffsetResetStrategy, but the Flink Kafka connector
+        // 5.0.0-2.2 has no other way to set this fallback. committedOffsets() without it
+        // fails on the first run, when no committed offsets exist.
+        @SuppressWarnings("deprecation")
+        OffsetsInitializer startingOffsets = OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST);
         KafkaSource<RawRecord> source = KafkaSource.<RawRecord>builder()
                 .setBootstrapServers(config.kafkaBootstrap)
                 .setTopicPattern(Pattern.compile("frigate\\..*"))
                 .setGroupId("hsec-stream")
-                .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST))
+                .setStartingOffsets(startingOffsets)
                 .setDeserializer(new RawRecordDeserializer())
                 .setProperty("partition.discovery.interval.ms", "60000")
                 .build();
