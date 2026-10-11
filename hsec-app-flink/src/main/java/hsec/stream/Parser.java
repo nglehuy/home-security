@@ -8,12 +8,16 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Turns raw Frigate messages into typed messages. It never throws on bad input. */
 public final class Parser {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Logger LOG = LoggerFactory.getLogger(Parser.class);
 
     private Parser() {}
 
@@ -147,11 +151,13 @@ public final class Parser {
         return m;
     }
 
+    @SuppressWarnings("UseSpecificCatch")
     private static Optional<JsonNode> json(byte[] value) {
         try {
             JsonNode n = JSON.readTree(value);
             return n != null && n.isObject() ? Optional.of(n) : Optional.empty();
         } catch (Exception ex) {
+            LOG.error("json parse error", ex);
             return Optional.empty();
         }
     }
@@ -180,6 +186,6 @@ public final class Parser {
                 }
             });
         }
-        return out.toArray(new String[0]);
+        return out.toArray(String[]::new);
     }
 }
