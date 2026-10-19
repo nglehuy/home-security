@@ -84,8 +84,13 @@ run "pod" {
   }
 
   assert {
-    condition     = kubernetes_deployment_v1.frigate.spec[0].template[0].spec[0].init_container[0].command[2] == "[ -f /config/config.yml ] || cp /seed/config.yml /config/config.yml"
-    error_message = "The init container must copy the seed only when no configuration exists."
+    condition     = kubernetes_deployment_v1.frigate.spec[0].template[0].spec[0].init_container[0].command[2] == "cp /seed/config.yml /config/config.yml"
+    error_message = "The init container must copy the seed on each start, so Terraform owns the configuration."
+  }
+
+  assert {
+    condition     = kubernetes_deployment_v1.frigate.spec[0].template[0].metadata[0].annotations["hsec/cameras-sha256"] == sha256(jsonencode(var.cameras))
+    error_message = "The pod must carry the hash of the cameras, so a camera change starts a new pod."
   }
 
   assert {

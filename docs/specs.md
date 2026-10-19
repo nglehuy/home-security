@@ -397,7 +397,8 @@ The source is the example Docker Compose file in the Frigate installation docs [
 
 ### Pod
 
-- Init container `seed-config`: uses the Frigate image and runs `[ -f /config/config.yml ] || cp /seed/config.yml /config/config.yml`. `/seed` is a ConfigMap that Terraform renders from `hsec-app-frigate/config.seed.yml.tftpl`.
+- Init container `seed-config`: uses the Frigate image and runs `cp /seed/config.yml /config/config.yml` on each start. `/seed` is a ConfigMap that Terraform renders from `hsec-app-frigate/config.seed.yml.tftpl`.
+- Pod annotation `hsec/cameras-sha256 = sha256(jsonencode(var.cameras))`. A camera change starts a new pod. See [ADR-8](system-design.md#adr-8-terraform-owns-the-frigate-configuration).
 - Environment from the Secret `frigate-env`: `FRIGATE_RTSP_PASSWORD`, `FRIGATE_MQTT_USER`, `FRIGATE_MQTT_PASSWORD`.
 - Resources: CPU request 1, memory 3 GiB (request and limit), `gpu.intel.com/i915: 1`. Memory-backed volumes count toward the memory limit.
 - Startup probe: `GET /api/version` on port 5000, every 10 seconds, up to 60 failures. The first start downloads models and takes several minutes.

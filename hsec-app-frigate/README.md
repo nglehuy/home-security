@@ -26,7 +26,11 @@ flowchart TB
 
 ## Configuration
 
-`config.seed.yml.tftpl` is the starting configuration. Terraform renders it with the namespace and the cameras, and stores it in the ConfigMap `frigate-seed`. If `/config/config.yml` does not exist, the init container `seed-config` copies the file there. After the first start, the Frigate web UI owns the file, so a later change to the template does not change a running system.
+`config.seed.yml.tftpl` is the Frigate configuration. Terraform renders it with the namespace and the cameras, and stores it in the ConfigMap `frigate-seed`. On each start, the init container `seed-config` copies the file to `/config/config.yml`. So Terraform owns the configuration. See [ADR-8](../docs/system-design.md#adr-8-terraform-owns-the-frigate-configuration).
+
+- The pod template has the annotation `hsec/cameras-sha256`, a hash of the variable `cameras`. When you change a camera and apply, Kubernetes starts a new pod with the new configuration.
+- A restart removes changes that you make in the Frigate UI. Copy zones and masks from the UI into the template.
+- A template change without a camera change reaches Frigate at the next restart. To restart now, run `kubectl -n hsec rollout restart deploy/frigate`.
 
 | Section | Value | Reason |
 | --- | --- | --- |
@@ -41,13 +45,13 @@ flowchart TB
 
 The camera URLs contain the text `{FRIGATE_RTSP_PASSWORD}`, and the MQTT login uses `{FRIGATE_MQTT_USER}` and `{FRIGATE_MQTT_PASSWORD}`. Frigate replaces them with environment variables from the Secret `frigate-env`. So no password is in the configuration file.
 
-If OpenVINO fails on the UHD 620, change `device: GPU` to `device: CPU` in the Frigate UI.
+If OpenVINO fails on the UHD 620, change `device: GPU` to `device: CPU` in the template. Then apply and restart Frigate.
 
 ## Kubernetes objects
 
 | Object | Name | Purpose |
 | --- | --- | --- |
-| ConfigMap | `frigate-seed` | The starting configuration |
+| ConfigMap | `frigate-seed` | The configuration that the init container copies on each start |
 | PVC | `frigate-config` | `/config` on the SSD class, 5 GiB: configuration, database, and models |
 | PVC | `frigate-media` | `/media/frigate` on the HDD class, 200 GiB: recordings and snapshots |
 | Deployment | `frigate` | One pod with the `Recreate` strategy, 3 GiB of memory, 1 CPU, and one Intel GPU |

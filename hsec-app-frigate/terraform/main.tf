@@ -11,8 +11,8 @@ locals {
   })
 }
 
-# The init container copies this file only when /config/config.yml does not
-# exist. After the first start, the Frigate UI owns the configuration.
+# The init container copies this file to /config/config.yml on each start, so
+# Terraform owns the configuration. A restart removes changes made in the UI.
 resource "kubernetes_config_map_v1" "seed" {
   metadata {
     name      = "frigate-seed"
@@ -89,6 +89,11 @@ resource "kubernetes_deployment_v1" "frigate" {
     template {
       metadata {
         labels = local.labels
+        # A camera change changes the pod template, so Kubernetes starts a new
+        # pod, and the init container copies the new configuration.
+        annotations = {
+          "hsec/cameras-sha256" = sha256(jsonencode(var.cameras))
+        }
       }
 
       spec {
@@ -97,7 +102,7 @@ resource "kubernetes_deployment_v1" "frigate" {
         init_container {
           name    = "seed-config"
           image   = local.image
-          command = ["sh", "-c", "[ -f /config/config.yml ] || cp /seed/config.yml /config/config.yml"]
+          command = ["sh", "-c", "cp /seed/config.yml /config/config.yml"]
 
           volume_mount {
             name       = "config"

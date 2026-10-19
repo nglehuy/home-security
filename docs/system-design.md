@@ -426,12 +426,18 @@ Kubernetes restarts each failed pod. The table shows what else happens.
 - Decision: the Helm chart in its normal mode, with one broker, one core, and 2.5 GiB of memory.
 - Consequences: Redpanda needs 2 GB of memory for its core [15].
 
-### ADR-8: Frigate configuration is seeded once
+### ADR-8: Terraform owns the Frigate configuration
 
-- Context: Frigate 0.18 can edit its configuration file from its web UI. You draw zones and masks in the UI.
-- Decision: if `config.yml` does not exist, an init container copies a starting file from Terraform. After that, the Frigate UI owns the file on the SSD volume.
-- Alternatives: Terraform owns the file and mounts it read-only. Then UI edits fail, and you must copy zone coordinates into Terraform by hand.
-- Consequences: Terraform changes to the starting configuration do not reach a running system. Back up `config.yml` after UI changes.
+- Context: Frigate 0.18 can edit its configuration file from its web UI. You draw zones and masks in the UI. The cameras come from the Terraform variable `cameras`.
+- Decision:
+  - On each start, an init container copies the file that Terraform renders to `config.yml` on the SSD volume.
+  - The pod template has the annotation `hsec/cameras-sha256`, a hash of `cameras`. So a camera change starts a new pod.
+- Alternatives:
+  - Seed once: if `config.yml` does not exist, the init container copies the file. After that, the UI owns the file, and camera changes in Terraform do not reach a running system.
+  - Mount the file read-only. Then UI edits fail.
+- Consequences:
+  - A restart, also a node reboot, removes UI edits. Copy zones and masks into `hsec-app-frigate/config.seed.yml.tftpl`.
+  - A template change without a camera change reaches Frigate at the next restart.
 
 ### ADR-9: Detection on the UHD 620, with a CPU fallback
 
