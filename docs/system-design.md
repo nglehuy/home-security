@@ -349,6 +349,7 @@ Kubernetes restarts each failed pod. The table shows what else happens.
 - Frigate: the UI on port 8971 needs a login. Port 5000 has no login and gives admin access [5]. The Service `frigate-api` exposes it inside the cluster for the Flink job. A network policy allows only the Flink TaskManager pod to reach it.
 - Passwords: Terraform creates random passwords for all internal users. You give only the Discord webhook URL, the camera RTSP password, and the Grafana token.
 - Terraform state: the state holds all passwords in plain text. It lives in a Kubernetes Secret, not in git. `.gitignore` must exclude `*.tfvars` and `.terraform/`.
+- CI/CD: the repository is public, and so are its run logs. The deploy workflow runs only for `main`, never for pull requests, so fork code never gets its secrets [31]. Its secrets live in the GitHub environment `pers-infra`. The workflow prints only the summary line of each apply. See [ADR-14](#adr-14-continuous-deployment-from-github-actions-over-tailscale).
 - Shared key: Flink and Spark share one RustFS key. This is an accepted risk for a home lab with one admin.
 - ClickHouse: the `default` user accepts only local connections. Grafana uses a read-only user.
 - Discord: anyone with the webhook URL can post to the channel. Keep it secret. Alerts contain the camera name, the time, the zones, a snapshot image, and the video of each alert review, household members included. These files leave the home network and stay on Discord, outside the 30-day retention.
@@ -514,13 +515,34 @@ Kubernetes restarts each failed pod. The table shows what else happens.
   - Nothing records which Iceberg files ran. You run each file once, in order.
   - The Flink tests create their test tables in Java code, so they must match the migrations.
 
+### ADR-14: Continuous deployment from GitHub Actions over Tailscale
+
+- Context:
+  - The repository is public on GitHub. Anyone can fork it, and anyone can read its run logs.
+  - The k3s API is not on the internet. The node is on a tailnet, a private Tailscale network.
+  - You want each push to `main` to build the two custom images and apply both Terraform roots, with no approval step.
+- Decision:
+  - The workflow `.github/workflows/deploy.yml` runs on GitHub-hosted runners, only for pushes to `main` and for manual starts.
+  - The images go to GHCR as public packages: `ghcr.io/nglehuy/hsec-app-flink` and `ghcr.io/nglehuy/hsec-app-spark`. The workflow pushes them with the job token, so the registry needs no stored password.
+  - The runner joins the tailnet as an ephemeral node with the tag `tag:ci`. It trades its GitHub OIDC token for a short-lived Tailscale key, so the setup stores no Tailscale secret [30].
+  - The runner reaches the k3s API on port 6443 of the node, with a cluster-admin service account token from the environment secrets. The root `terraform/000-cicd` creates this token. You apply that root by hand, and its state stays on your machine.
+  - The environment `pers-infra` accepts only the `main` branch, and holds the kubeconfig and both `terraform.tfvars` files.
+- Alternatives:
+  - A self-hosted runner on the k3s host. GitHub advises against self-hosted runners for public repositories, because a fork pull request can run code on them [31].
+  - The Tailscale Kubernetes operator with its API server proxy. Then CI needs no Kubernetes token, but the cluster needs the operator.
+  - An approval step before each apply. You chose automatic deploys.
+- Consequences:
+  - Each push to `main` changes the cluster within minutes. Test your change before you push.
+  - The workflow does not run the schema migrations. On a fresh cluster, you deploy once by hand. See [ADR-13](#adr-13-schema-migrations-by-hand).
+  - Anyone with write access to `main` controls the cluster. Keep the repository with one writer, and let a fork pull request run workflows only after your approval.
+  - After you change a `terraform.tfvars` file, you must save its environment secret again.
+
 ## Open questions
 
 1. How many cameras are there, and what are their RTSP URLs, resolutions, and bitrates? A 25-second clip part must stay under 19 MiB, so each record stream can use up to about 6 Mbit/s.
 2. What are the names of the SSD and HDD storage classes?
-3. Which image registry can the cluster pull from?
-4. What are the Grafana URL and namespace, and is the ClickHouse plugin installed?
-5. Which Kubernetes version does the k3s cluster run?
+3. What are the Grafana URL and namespace, and is the ClickHouse plugin installed?
+4. Which Kubernetes version does the k3s cluster run?
 
 ## References
 
@@ -581,3 +603,7 @@ Kubernetes restarts each failed pod. The table shows what else happens.
 [28] Frigate contributors, "`frigate/ffmpeg_presets.py`," GitHub. Accessed: Oct. 4, 2026. [Online]. Available: https://github.com/blakeblackshear/frigate/blob/master/frigate/ffmpeg_presets.py
 
 [29] golang-migrate contributors, "golang-migrate/migrate," GitHub. Accessed: Oct. 4, 2026. [Online]. Available: https://github.com/golang-migrate/migrate
+
+[30] Tailscale, "Workload identity federation," Tailscale Docs. Accessed: Oct. 17, 2026. [Online]. Available: https://tailscale.com/kb/1581/workload-identity-federation
+
+[31] GitHub, "Security hardening for GitHub Actions," GitHub Docs. Accessed: Oct. 17, 2026. [Online]. Available: https://docs.github.com/en/actions/reference/security/secure-use

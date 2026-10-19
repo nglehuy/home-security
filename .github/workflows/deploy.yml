@@ -1,0 +1,189 @@
+name: Deploy to pers-infra
+
+# Builds the two custom images and applies both Terraform roots to the
+# pers-infra k3s cluster over Tailscale. It runs only for pushes to main and
+# for manual starts, never for pull requests. So code from a fork never runs
+# with the secrets and never reaches the cluster.
+
+on:
+  push:
+    branches: [main]
+    # A push that changes only documents does not start a deploy.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+# One deploy at a time. A new run waits until the active run ends. If more
+# runs wait, only the newest one runs.
+concurrency:
+  group: deploy-pers-infra
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  tags:
+    name: Image tags
+    runs-on: ubuntu-24.04
+    outputs:
+      flink: ${{ steps.tags.outputs.flink }}
+      spark: ${{ steps.tags.outputs.spark }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The tag is a hash of the git objects that the Dockerfile copies:
+      # Dockerfile, pom.xml, and src. It changes only when one of them
+      # changes. So an unchanged app keeps its image, and Terraform does not
+      # restart it.
+      - name: Compute the tags
+        id: tags
+        run: |
+          tag() { git ls-tree HEAD -- "$1/Dockerfile" "$1/pom.xml" "$1/src" | git hash-object --stdin | cut -c1-12; }
+          echo "flink=$(tag hsec-app-flink)" >> "$GITHUB_OUTPUT"
+          echo "spark=$(tag hsec-app-spark)" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: Image ${{ matrix.app }}
+    needs: tags
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - app: hsec-app-flink
+            tag: flink
+          - app: hsec-app-spark
+            tag: spark
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:${{ needs.tags.outputs[matrix.tag] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Look for the image
+        id: image
+        run: |
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE exists already, so this job skips the tests and the build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Java 17
+        if: steps.image.outputs.exists == 'false'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: ${{ matrix.app }}/pom.xml
+
+      # The Docker build skips the tests, so the job runs them first.
+      - name: Test
+        if: steps.image.outputs.exists == 'false'
+        working-directory: ${{ matrix.app }}
+        run: mvn -B -ntp test
+
+      - name: Set up Docker Buildx
+        if: steps.image.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # The host CPU of pers-infra is amd64, the same as the runner.
+      - name: Build and push
+        if: steps.image.outputs.exists == 'false'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.app }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  deploy:
+    name: Terraform apply
+    needs: [tags, images]
+    runs-on: ubuntu-24.04
+    # The environment allows only the main branch, and holds the secrets.
+    environment: pers-infra
+    permissions:
+      contents: read
+      # Tailscale trades the GitHub OIDC token for a short-lived node key.
+      id-token: write
+    env:
+      TF_IN_AUTOMATION: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner joins the tailnet as an ephemeral node with the tag tag:ci.
+      - name: Join the tailnet
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: false
+
+      # The roots keep their state in the cluster, and read the kubeconfig
+      # from ~/.kube/config. The tfvars files are git-ignored, so they come
+      # from secrets.
+      - name: Write the kubeconfig and the tfvars files
+        env:
+          KUBECONFIG_DATA: ${{ secrets.PERS_INFRA_KUBECONFIG }}
+          TFVARS_010: ${{ secrets.TFVARS_010_WORKLOAD }}
+          TFVARS_020: ${{ secrets.TFVARS_020_APP }}
+        run: |
+          umask 077
+          mkdir -p ~/.kube
+          printf '%s\n' "$KUBECONFIG_DATA" > ~/.kube/config
+          printf '%s\n' "$TFVARS_010" > terraform/010-workload/terraform.tfvars
+          printf '%s\n' "$TFVARS_020" > terraform/020-app/terraform.tfvars
+          echo "KUBE_CONTEXT=$(kubectl config current-context)" >> "$GITHUB_ENV"
+          kubectl version >/dev/null
+          echo "The cluster API answers over the tailnet."
+
+      - name: Apply terraform/010-workload
+        working-directory: terraform/010-workload
+        run: >-
+          ../../.github/scripts/terraform-apply.sh
+          -var "kubeconfig_path=$HOME/.kube/config"
+          -var "kube_context=$KUBE_CONTEXT"
+
+      - name: Apply terraform/020-app
+        working-directory: terraform/020-app
+        env:
+          FLINK_TAG: ${{ needs.tags.outputs.flink }}
+          SPARK_TAG: ${{ needs.tags.outputs.spark }}
+        run: >-
+          ../../.github/scripts/terraform-apply.sh
+          -var "kubeconfig_path=$HOME/.kube/config"
+          -var "kube_context=$KUBE_CONTEXT"
+          -var "image_registry=$REGISTRY"
+          -var "flink_image_tag=$FLINK_TAG"
+          -var "spark_image_tag=$SPARK_TAG"

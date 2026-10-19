@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and fill in the values. Do not commit terraform.tfvars.
+# The kubeconfig must reach the cluster as a cluster admin.
+kubeconfig_path = "~/.kube/config"
+
+kube_context = "default"
+
+# Name of the cluster and of the context in the CI kubeconfig.
+cluster_name = "pers-infra"
+
+# MagicDNS name of the k3s node: machine name plus the tailnet DNS name from
+# the DNS page of the Tailscale admin console.
+api_host = "exit-node.tailscale.ts.net"

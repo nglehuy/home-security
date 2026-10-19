@@ -54,6 +54,9 @@ variable "cameras" {
     detect_width  = number
     detect_height = number
   }))
+  # The camera URLs show the camera addresses and user names. Terraform hides
+  # sensitive values in its output, which matters for the public CI logs.
+  sensitive = true
 }
 
 variable "night_start" {
