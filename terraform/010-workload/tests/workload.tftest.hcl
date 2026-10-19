@@ -4,7 +4,6 @@ mock_provider "random" {}
 
 variables {
   kube_context          = "test"
-  node_name             = "vostro"
   ssd_storage_class     = "ssd"
   hdd_storage_class     = "hdd"
   discord_webhook_url   = "https://discord.com/api/webhooks/1/abc"
@@ -94,25 +93,6 @@ run "grafana_rule_when_set" {
   assert {
     condition     = kubernetes_network_policy_v1.clickhouse_grafana[0].spec[0].ingress[0].from[0].namespace_selector[0].match_labels == tomap({ "kubernetes.io/metadata.name" = "monitoring" })
     error_message = "Grafana pods must reach ClickHouse port 8123."
-  }
-}
-
-run "gpu_plugin" {
-  command = plan
-
-  assert {
-    condition     = kubernetes_daemon_set_v1.gpu_plugin.metadata[0].namespace == "intel-gpu-plugin" && kubernetes_daemon_set_v1.gpu_plugin.spec[0].template[0].spec[0].container[0].image == "intel/intel-gpu-plugin:0.37.1"
-    error_message = "The GPU plugin must be 0.37.1 in its own namespace."
-  }
-
-  assert {
-    condition     = kubernetes_daemon_set_v1.gpu_plugin.spec[0].template[0].spec[0].node_selector["kubernetes.io/hostname"] == "vostro"
-    error_message = "The GPU plugin must run on the given node."
-  }
-
-  assert {
-    condition     = kubernetes_daemon_set_v1.gpu_plugin.spec[0].template[0].spec[0].container[0].security_context[0].se_linux_options[0].type == "container_device_plugin_t"
-    error_message = "The plugin needs the SELinux type for device plugins on Fedora."
   }
 }
 

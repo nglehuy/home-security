@@ -72,7 +72,8 @@ hsec-app-frigate/
 
 ## Deploy
 
-- Terraform root: `terraform/020-app`. Apply `terraform/010-workload` first, because it creates the GPU plugin, the Secret `frigate-env`, and Mosquitto.
+- Terraform root: `terraform/020-app`. Apply `terraform/010-workload` first, because it creates the Secret `frigate-env` and Mosquitto.
+- GPU: the cluster must offer the resource `gpu.intel.com/i915`. The k3s setup of the cluster installs the Intel GPU device plugin that offers it.
 - Module inputs: `namespace`, `labels`, `ssd_storage_class`, `hdd_storage_class`, `timezone`, `env_secret_name`, and `cameras`.
 - A camera name can use only letters, digits, `_`, and `-`. The detect width and height must be greater than 0.
 

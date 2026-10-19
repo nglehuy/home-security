@@ -64,7 +64,7 @@ Three Terraform roots exist. `010-workload` and `020-app` call the modules, and 
 | Root | Creates | README |
 | --- | --- | --- |
 | `terraform/000-cicd` | The identity and the kubeconfig of the deploy workflow | [README](terraform/000-cicd/README.md) |
-| `terraform/010-workload` | Namespaces, the Intel GPU plugin, passwords, Secrets, network policies, and the data services | [README](terraform/010-workload/README.md) |
+| `terraform/010-workload` | The namespace `hsec`, passwords, Secrets, network policies, and the data services | [README](terraform/010-workload/README.md) |
 | `terraform/020-app` | Frigate, the bridge, the notifier, Flink, and Spark | [README](terraform/020-app/README.md) |
 
 ## Repository layout

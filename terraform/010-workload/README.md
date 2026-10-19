@@ -4,8 +4,7 @@ This is Terraform root 1. You apply it first. It creates the base that the apps 
 
 ## Contents
 
-- Namespaces `hsec` and `intel-gpu-plugin`.
-- The Intel GPU plugin, as a DaemonSet with the image `intel/intel-gpu-plugin:0.37.1`.
+- The namespace `hsec`.
 - All passwords, with `random_password`, and all Kubernetes Secrets.
 - The network policies of the namespace `hsec`.
 - The modules `hsec-db-rustfs`, `hsec-q-redpanda`, `hsec-q-mqtt`, `hsec-db-clickhouse`, and `hsec-db-iceberg`.
@@ -26,7 +25,7 @@ Do not commit `terraform.tfvars`, because it holds secret values. [Secrets](../.
 
 ## Variables
 
-- Cluster: `kubeconfig_path`, `kube_context`, `namespace`, `node_name`.
+- Cluster: `kubeconfig_path`, `kube_context`, `namespace`.
 - Storage and time: `ssd_storage_class`, `hdd_storage_class`, `timezone`.
 - Grafana, optional: `grafana_namespace`. If you set it, a network policy lets the Grafana pods reach ClickHouse on port 8123.
 - Sensitive: `discord_webhook_url`, `frigate_rtsp_password`.
@@ -47,4 +46,4 @@ Run `terraform validate` and `terraform test`. The tests cover the module calls,
 
 ## Details
 
-See [Roots](../../docs/specs.md#roots), [Secrets](../../docs/specs.md#secrets), [Variables](../../docs/specs.md#variables), [Intel GPU plugin](../../docs/specs.md#intel-gpu-plugin), and [Network policies](../../docs/specs.md#network-policies) in the specs.
+See [Roots](../../docs/specs.md#roots), [Secrets](../../docs/specs.md#secrets), [Variables](../../docs/specs.md#variables), and [Network policies](../../docs/specs.md#network-policies) in the specs.

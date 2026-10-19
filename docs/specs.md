@@ -12,7 +12,6 @@
 - [Terraform](#terraform)
 - [Container images](#container-images)
 - [Schema migrations](#schema-migrations)
-- [Intel GPU plugin](#intel-gpu-plugin)
 - [Frigate](#frigate)
 - [Mosquitto](#mosquitto)
 - [Redpanda](#redpanda)
@@ -34,12 +33,11 @@
 
 The code and the sketches in this file use these names. A sketch shows the required behavior. The implementation can change the form, but it must keep the behavior.
 
-Namespaces:
+Namespace:
 
 | Namespace | Contents |
 | --- | --- |
 | `hsec` | All apps, the Flink and Spark operators, the Flink job, and the Spark job. The Terraform variable `namespace` sets this name, and its default is `hsec`. |
-| `intel-gpu-plugin` | Intel GPU device plugin |
 
 In-cluster endpoints:
 
@@ -80,7 +78,7 @@ Shared folders:
 
 | Folder | Contents |
 | --- | --- |
-| `terraform/010-workload` | Terraform root 1: the namespaces, the Intel GPU plugin, passwords, Secrets, network policies, and the data services |
+| `terraform/010-workload` | Terraform root 1: the namespace `hsec`, passwords, Secrets, network policies, and the data services |
 | `terraform/020-app` | Terraform root 2: Frigate, the Redpanda Connect bridge and notifier, Flink, and Spark |
 | `docs` | Design documents |
 | `tests` | The end-to-end smoke test |
@@ -118,7 +116,7 @@ Terraform has two root modules in `terraform/`. Each root has its own state, and
 
 | Root | Creates directly | Calls the modules |
 | --- | --- | --- |
-| `terraform/010-workload` | Namespaces `hsec` and `intel-gpu-plugin`, Intel GPU plugin, passwords, all Kubernetes Secrets, network policies | `hsec-db-rustfs`, `hsec-q-redpanda`, `hsec-q-mqtt`, `hsec-db-clickhouse`, `hsec-db-iceberg` |
+| `terraform/010-workload` | Namespace `hsec`, passwords, all Kubernetes Secrets, network policies | `hsec-db-rustfs`, `hsec-q-redpanda`, `hsec-q-mqtt`, `hsec-db-clickhouse`, `hsec-db-iceberg` |
 | `terraform/020-app` | nothing | `hsec-app-frigate`, `hsec-conn-mqtt`, `hsec-conn-discord`, `hsec-app-flink`, `hsec-app-spark` |
 
 `hsec-app-flink` and `hsec-app-spark` each install an operator and a job in the same apply. The job is a custom resource of the operator CRDs. A `kubernetes_manifest` resource reads the CRD from the cluster during the plan [1], so it fails on a fresh cluster. So each job is a small local Helm chart in `<app>/terraform/chart/`. The module installs the operator chart and then the job chart, both with `helm_release`. The job release has `depends_on` on the operator release. Helm checks the custom resource only at install time. At that point, the operator CRDs already exist.
@@ -201,7 +199,6 @@ Add these lines to `.gitignore`:
 | `kubeconfig_path` | string | `~/.kube/config` | All | Cluster access |
 | `kube_context` | string | none | All | Cluster access |
 | `namespace` | string | `hsec` | All | Namespace for all apps |
-| `node_name` | string | none | `010-workload` | Node for the GPU plugin |
 | `timezone` | string | `Asia/Singapore` | `010-workload`, `020-app` | Local time for Frigate, Flink, Spark, ClickHouse, and the notifier |
 | `ssd_storage_class` | string | none | `010-workload`, `020-app` | Class for SSD volumes |
 | `hdd_storage_class` | string | none | `010-workload`, `020-app` | Class for the Frigate media, RustFS, and ClickHouse volumes |
@@ -371,17 +368,6 @@ spark-sql --master "local[1]" \
 - The table locations in the catalog stay `s3://hsec-lake/warehouse/...`. Only the client uses the local endpoint, so Flink and Spark in the cluster still find the files.
 - `--packages` gets the same jar versions as the `hsec-app-spark` image. The first run downloads them from Maven Central.
 - `kubectl port-forward` reaches the pods through the Kubernetes API, so the network policies do not block the tunnels.
-
-## Intel GPU plugin
-
-Folder: `terraform/010-workload`. The plugin is not an app, so the root creates it directly.
-
-- Translate the upstream DaemonSet `deployments/gpu_plugin/base/intel-gpu-plugin.yaml` from release v0.37.1 into a `kubernetes_daemon_set_v1` [3].
-- Keep the image `intel/intel-gpu-plugin:0.37.1` and the upstream host mounts.
-- Add the node selector `kubernetes.io/hostname = var.node_name`.
-- Keep the argument `-shared-dev-num=1`, because only Frigate uses the GPU.
-- Result: the node shows `gpu.intel.com/i915: 1` in its allocatable resources.
-- The host has two GPUs: the Intel UHD 620 and the AMD Radeon R5 M435. The plugin offers only Intel GPUs, so the AMD GPU never reaches a pod [3].
 
 ## Frigate
 
@@ -1492,7 +1478,7 @@ The smoke test does these steps:
 ```text
 home-security/
 ├── terraform/
-│   ├── 010-workload/                # root 1: namespaces, Intel GPU plugin, passwords, Secrets, network policies, data services
+│   ├── 010-workload/                # root 1: namespace hsec, passwords, Secrets, network policies, data services
 │   │   └── README.md
 │   └── 020-app/                     # root 2: Frigate, bridge, notifier, Flink, Spark
 ├── hsec-app-frigate/
@@ -1559,8 +1545,6 @@ Each app folder and each root in `terraform/` has a `README.md`. Each `<app>/ter
 [1] HashiCorp, "kubernetes_manifest," Terraform Kubernetes Provider Documentation. Accessed: Oct. 3, 2026. [Online]. Available: https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/manifest
 
 [2] ClickHouse, "Spark Connector," ClickHouse Documentation. Accessed: Oct. 3, 2026. [Online]. Available: https://clickhouse.com/docs/integrations/apache-spark/spark-native-connector
-
-[3] Intel, "Intel GPU device plugin for Kubernetes," GitHub, release v0.37.1. Accessed: Oct. 3, 2026. [Online]. Available: https://github.com/intel/intel-device-plugins-for-kubernetes/tree/v0.37.1/cmd/gpu_plugin
 
 [4] Frigate, "Installation," Frigate Documentation. Accessed: Oct. 3, 2026. [Online]. Available: https://docs.frigate.video/frigate/installation
 

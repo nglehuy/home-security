@@ -15,11 +15,6 @@ variable "namespace" {
   default     = "hsec"
 }
 
-variable "node_name" {
-  description = "Name of the node with the Intel UHD 620, for the GPU plugin."
-  type        = string
-}
-
 variable "timezone" {
   description = "Local time zone, for example Asia/Singapore."
   type        = string
