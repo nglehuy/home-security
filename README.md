@@ -64,7 +64,7 @@ Three Terraform roots exist. `010-workload` and `020-app` call the modules, and 
 | Root | Creates | README |
 | --- | --- | --- |
 | `terraform/000-cicd` | The identity and the kubeconfig of the deploy workflow | [README](terraform/000-cicd/README.md) |
-| `terraform/010-workload` | The namespace `hsec`, passwords, Secrets, network policies, and the data services | [README](terraform/010-workload/README.md) |
+| `terraform/010-workload` | The namespace `hsec`, passwords, Secrets, network policies, the data services, and the schema migration Jobs | [README](terraform/010-workload/README.md) |
 | `terraform/020-app` | Frigate, the bridge, the notifier, Flink, and Spark | [README](terraform/020-app/README.md) |
 
 ## Repository layout
@@ -102,16 +102,16 @@ The admin machine needs these tools:
 
 - Terraform 1.16 and kubectl, with a kubeconfig that has cluster-admin rights.
 - Docker with `buildx`, Java 17 or newer, and Maven, to build the two images.
-- golang-migrate 4.20.1, for the ClickHouse migrations.
-- Java 17 and Spark 4.0.4 (`spark-4.0.4-bin-hadoop3`), for the Iceberg migrations.
 - An image registry that the cluster can pull from, and a Discord webhook URL.
+
+`terraform/010-workload` runs the schema migrations as Kubernetes Jobs. To run a migration by hand, you also need golang-migrate 4.20.1 for ClickHouse, or Spark 4.0.4 for Iceberg. See [Migrate](hsec-db-clickhouse/README.md#migrate) in the ClickHouse README and [Migrate](hsec-db-iceberg/README.md#migrate) in the Iceberg README.
 
 ## Deploy
 
 On a fresh cluster, do these steps in order. Run each command from the repository root.
 
 1. Copy `terraform/010-workload/terraform.tfvars.example` to `terraform/010-workload/terraform.tfvars`, and fill in the values.
-2. Apply the first root. It creates the base and the data services.
+2. Apply the first root. It creates the base and the data services, and runs the ClickHouse and Iceberg migrations.
 
    ```sh
    (cd terraform/010-workload && terraform init && terraform apply)
@@ -125,10 +125,8 @@ On a fresh cluster, do these steps in order. Run each command from the repositor
    docker buildx build --platform linux/amd64 -t <registry>/hsec-app-spark:<tag> --push hsec-app-spark/
    ```
 
-4. Run the ClickHouse migrations with golang-migrate. See [Migrate](hsec-db-clickhouse/README.md#migrate) in the ClickHouse README.
-5. Run the Iceberg migrations with `migrate.sh`. See [Migrate](hsec-db-iceberg/README.md#migrate) in the Iceberg README.
-6. Copy `terraform/020-app/terraform.tfvars.example` to `terraform/020-app/terraform.tfvars`. Fill in the values, with the same registry and tags as the images that you pushed.
-7. Apply the second root. It installs the apps.
+4. Copy `terraform/020-app/terraform.tfvars.example` to `terraform/020-app/terraform.tfvars`. Fill in the values, with the same registry and tags as the images that you pushed.
+5. Apply the second root. It installs the apps.
 
    ```sh
    (cd terraform/020-app && terraform init && terraform apply)
@@ -156,7 +154,7 @@ flowchart TB
 - One deploy runs at a time. A new run waits until the active run ends. If more runs wait, only the newest one runs.
 - The image tag is a hash of the files that the Dockerfile copies: `Dockerfile`, `pom.xml`, and `src`. If these files did not change, the tag stays the same, and Terraform does not restart the app.
 - The run logs of a public repository are public. So `.github/scripts/terraform-apply.sh` prints only the summary line of each apply, or only the error blocks. The `cameras` variable is sensitive, so Terraform also hides the camera addresses.
-- The workflow does not run the migrations. On a fresh cluster, follow [Deploy](#deploy) once by hand, because the migrations must run between the two roots. Use the workflow for the updates after that.
+- The apply of `terraform/010-workload` runs the migrations before the apply of `terraform/020-app` starts the apps. So the workflow also works on a fresh cluster.
 
 ### One-time setup
 

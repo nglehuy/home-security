@@ -79,7 +79,7 @@ This design needs the system below. It does not install or change these parts.
 | Internet | Pods can reach `discord.com` on TCP 443. Frigate downloads its face models on first start. | `curl -I https://discord.com` from a pod. |
 | LAN access | LAN and WireGuard clients can reach the node address on ports 8971, 8554, and 8555. | Open `https://192.168.1.17:8971` from a LAN client. |
 | Grafana | Existing Grafana with the `grafana-clickhouse-datasource` plugin. A service account token with the Admin role. | Grafana plugin list and service account page. |
-| Admin machine | Terraform 1.16, kubectl, Docker with `buildx`, golang-migrate 4.20.1, Java 17, and Spark 4.0.4. A kubeconfig with cluster-admin rights. | `terraform version`, `migrate -version`, `spark-sql --version`, `kubectl auth can-i '*' '*'` |
+| Admin machine | Terraform 1.16, kubectl, and Docker with `buildx`. A kubeconfig with cluster-admin rights. To run a migration by hand, also golang-migrate 4.20.1, Java 17, and Spark 4.0.4. | `terraform version`, `kubectl auth can-i '*' '*'` |
 | Image registry | A registry that the cluster can pull from, for the two custom images (Flink job and Spark job). | `docker push` from the admin machine and a test pull on the node. |
 | Discord | A webhook URL for the alert channel. | Send a test message with `curl`. |
 
@@ -502,22 +502,25 @@ Kubernetes restarts each failed pod. The table shows what else happens.
   - A reference older than 14 days finds no video.
   - Snapshot images and alert clips leave the home network through Discord.
 
-### ADR-13: Schema migrations by hand
+### ADR-13: Schema migrations as Jobs in the first root
 
 - Context:
   - You want each table schema in the folder of its database app.
-  - You want to run each schema change yourself, not as a side effect of a deploy.
+  - The deploy workflow applies both roots on each push, also on a fresh cluster. If a table is missing, the Flink job fails at start.
   - golang-migrate has a ClickHouse driver, but no driver for Spark or Iceberg [29].
 - Decision:
-  - The ClickHouse migrations are in `hsec-db-clickhouse/migrations/`. You run them with golang-migrate, which records the applied version in ClickHouse.
-  - The Iceberg migrations are in `hsec-db-iceberg/migrations/`, in Spark SQL, with the golang-migrate file names. A script runs one file with a local `spark-sql`, through `kubectl port-forward` tunnels to Postgres and RustFS.
-  - Terraform, Flink, and Spark never create or change tables.
+  - The ClickHouse migrations are in `hsec-db-clickhouse/migrations/`. The Job `clickhouse-migrations-<hash>` runs them with golang-migrate, which records the applied version in ClickHouse.
+  - The Iceberg migrations are in `hsec-db-iceberg/migrations/`, in Spark SQL, with the golang-migrate file names. The Job `iceberg-migrations-<hash>` runs each file with `spark-sql` from the public Spark 4.0.4 image.
+  - `terraform/010-workload` creates both Jobs after the databases are ready, and waits until they complete. The hash in each Job name comes from its files.
+  - Flink and Spark never create or change tables.
 - Alternatives:
-  - The Flink job creates the Iceberg tables, and a Terraform Job runs the ClickHouse schema. Then a deploy can change a schema without your action.
+  - Migrations by hand, between the two applies. Then the workflow cannot deploy a fresh cluster, and a deploy can start a job before its tables exist.
+  - The Flink job creates the Iceberg tables. Then the schema lives in Java code, far from the other migrations.
   - pyiceberg for the Iceberg migrations. It needs its own Python project.
 - Consequences:
-  - On a fresh cluster, you run the migrations between the two applies.
-  - Nothing records which Iceberg files ran. You run each file once, in order.
+  - If a migration file changes, the next deploy changes the schema. Test a new file by hand first, with `migrate.sh` or golang-migrate.
+  - Nothing records which Iceberg files ran. If one file changes, the Job runs every file again. So each file must change nothing on a second run.
+  - The Iceberg Job downloads its jars from Maven Central on each run, so the pod needs internet access.
   - The Flink tests create their test tables in Java code, so they must match the migrations.
 
 ### ADR-14: Continuous deployment from GitHub Actions over Tailscale
@@ -538,7 +541,7 @@ Kubernetes restarts each failed pod. The table shows what else happens.
   - An approval step before each apply. You chose automatic deploys.
 - Consequences:
   - Each push to `main` changes the cluster within minutes. Test your change before you push.
-  - The workflow does not run the schema migrations. On a fresh cluster, you deploy once by hand. See [ADR-13](#adr-13-schema-migrations-by-hand).
+  - The apply of `terraform/010-workload` runs the schema migrations, so the workflow can also deploy a fresh cluster. See [ADR-13](#adr-13-schema-migrations-as-jobs-in-the-first-root).
   - Anyone with write access to `main` controls the cluster. Keep the repository with one writer, and let a fork pull request run workflows only after your approval.
   - After you change a `terraform.tfvars` file, you must save its environment secret again.
 

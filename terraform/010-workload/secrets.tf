@@ -65,7 +65,7 @@ locals {
     "postgres-iceberg" = {
       POSTGRES_PASSWORD = local.pw.postgres_iceberg
     }
-    # No pod uses it. It is only for the ClickHouse migrations.
+    # Only the ClickHouse migration Job uses it.
     "clickhouse-admin" = {
       CLICKHOUSE_ADMIN_PASSWORD = local.pw.clickhouse_admin
     }

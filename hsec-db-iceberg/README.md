@@ -50,7 +50,7 @@ Parquet is the file format of the data files [6]. A Parquet file has row groups.
 flowchart TB
   FL["Flink job: hsec-app-flink<br/>appends rows every minute"] --> CAT
   SP["Spark job: hsec-app-spark<br/>reads every 15 minutes, cleans every night"] --> CAT
-  MIG["You: migrate.sh"] --> CAT
+  MIG["Job iceberg-migrations: spark-sql"] --> CAT
   CAT["Iceberg JDBC catalog lake"] -- "table name and current metadata file" --> PG[("Postgres 18.6<br/>database iceberg_catalog, table iceberg_tables")]
   CAT -- "metadata and Parquet files" --> S3[("RustFS bucket hsec-lake<br/>warehouse/hsec/table/metadata and data")]
 ```
@@ -95,15 +95,15 @@ Spark SQL `timestamp` creates an Iceberg `timestamptz` column. The tables keep t
 
 ## Migrate
 
-Terraform creates no tables, and the Flink and Spark jobs never create or change tables. You run the migrations by hand, after `terraform/010-workload` and before `terraform/020-app`.
+`terraform/010-workload` runs the migrations in the Job `iceberg-migrations-<hash>`, after Postgres and RustFS are ready. See [Migrations](../terraform/010-workload/README.md#migrations). The Flink and Spark jobs never create or change tables.
 
-golang-migrate has no Iceberg driver. So the files use the golang-migrate names, but `migrate.sh` runs them with a local `spark-sql`.
+golang-migrate has no Iceberg driver. So the files use the golang-migrate names, but `spark-sql` runs them.
 
 - The folder has only `.up.sql` files. A dropped Iceberg table loses its data, so no `.down.sql` files exist.
-- Nothing records which files ran. You run each file once, in order. `0001_init.up.sql` changes nothing on a second run.
+- Nothing records which files ran. When a file changes, the Job runs every file again, in order. So each file must change nothing on a second run. `0001_init.up.sql` uses `IF NOT EXISTS`.
 - Never change a file after it ran on the cluster. Write a new file instead.
 
-You need Java 17 and Spark 4.0.4 (`spark-4.0.4-bin-hadoop3`) on the admin machine, with `spark-sql` on the `PATH`.
+To run a file by hand, for example to test a new file, use `migrate.sh`. You need Java 17 and Spark 4.0.4 (`spark-4.0.4-bin-hadoop3`) on the admin machine, with `spark-sql` on the `PATH`.
 
 1. In a first terminal, run `kubectl -n hsec port-forward svc/postgres 15432:5432`.
 2. In a second terminal, run `kubectl -n hsec port-forward svc/rustfs-svc 19000:9000`.

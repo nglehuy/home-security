@@ -10,6 +10,80 @@ variables {
   frigate_rtsp_password = "camera"
 }
 
+run "migrations" {
+  command = plan
+
+  assert {
+    condition     = sort(keys(kubernetes_config_map_v1.clickhouse_migrations.data)) == sort(tolist(fileset("../../hsec-db-clickhouse/migrations", "*.sql")))
+    error_message = "The ClickHouse ConfigMap must hold every ClickHouse migration file."
+  }
+
+  assert {
+    condition     = sort(keys(kubernetes_config_map_v1.iceberg_migrations.data)) == sort(tolist(fileset("../../hsec-db-iceberg/migrations", "*.up.sql")))
+    error_message = "The Iceberg ConfigMap must hold every Iceberg .up.sql file."
+  }
+
+  assert {
+    condition     = can(regex("^clickhouse-migrations-[0-9a-f]{8}$", kubernetes_job_v1.clickhouse_migrations.metadata[0].name)) && can(regex("^iceberg-migrations-[0-9a-f]{8}$", kubernetes_job_v1.iceberg_migrations.metadata[0].name))
+    error_message = "Each Job name must end with a hash of its files."
+  }
+
+  assert {
+    condition = kubernetes_job_v1.clickhouse_migrations.spec[0].template[0].spec[0].container[0].args == tolist([
+      "-path", "/migrations",
+      "-database", "clickhouse://clickhouse.hsec.svc.cluster.local:9000?username=hsec_admin&password=$(CLICKHOUSE_ADMIN_PASSWORD)&database=hsec&x-multi-statement=true",
+      "up",
+    ])
+    error_message = "golang-migrate must run up as hsec_admin against the in-cluster ClickHouse."
+  }
+
+  assert {
+    condition     = kubernetes_job_v1.clickhouse_migrations.spec[0].template[0].spec[0].container[0].image == "migrate/migrate:v4.20.1" && [for e in kubernetes_job_v1.clickhouse_migrations.spec[0].template[0].spec[0].container[0].env : e.value_from[0].secret_key_ref[0].name if e.name == "CLICKHOUSE_ADMIN_PASSWORD"] == ["clickhouse-admin"]
+    error_message = "The ClickHouse Job must use golang-migrate 4.20.1 and the password from clickhouse-admin."
+  }
+
+  assert {
+    condition     = [for v in kubernetes_job_v1.clickhouse_migrations.spec[0].template[0].spec[0].volume : v.host_path[0].path if v.name == "zoneinfo"] == ["/usr/share/zoneinfo"] && [for m in kubernetes_job_v1.clickhouse_migrations.spec[0].template[0].spec[0].container[0].volume_mount : [m.mount_path, m.read_only] if m.name == "zoneinfo"] == [["/usr/share/zoneinfo", true]]
+    error_message = "The ClickHouse Job must get the time zone data of the node, read-only."
+  }
+
+  assert {
+    condition     = kubernetes_job_v1.iceberg_migrations.spec[0].template[0].spec[0].container[0].image == "apache/spark:4.0.4-scala2.13-java17-ubuntu" && kubernetes_job_v1.iceberg_migrations.spec[0].template[0].spec[0].container[0].env_from[0].secret_ref[0].name == "spark-env"
+    error_message = "The Iceberg Job must use the public Spark 4.0.4 image and the Secret spark-env."
+  }
+
+  assert {
+    condition = alltrue([for s in [
+      "--packages org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.12.0,org.apache.iceberg:iceberg-aws-bundle:1.12.0,org.postgresql:postgresql:42.7.13",
+      "spark.jars.ivy /tmp/ivy",
+      "spark.sql.catalog.lake.uri jdbc:postgresql://postgres.hsec.svc.cluster.local:5432/iceberg_catalog",
+      "spark.sql.catalog.lake.s3.endpoint http://rustfs-svc.hsec.svc.cluster.local:9000",
+      "spark.sql.catalog.lake.jdbc.schema-version V1",
+      "spark.sql.catalog.lake.jdbc.password $POSTGRES_ICEBERG_PASSWORD",
+      "for f in /migrations/*.up.sql; do",
+    ] : strcontains(kubernetes_job_v1.iceberg_migrations.spec[0].template[0].spec[0].container[0].command[2], s)])
+    error_message = "The Iceberg Job must get the jars of the hsec-app-spark image, use the in-cluster catalog with V1, read the password from the environment, and run every .up.sql file."
+  }
+
+  assert {
+    condition     = kubernetes_job_v1.clickhouse_migrations.wait_for_completion && kubernetes_job_v1.iceberg_migrations.wait_for_completion
+    error_message = "Terraform must wait until each migration Job completes."
+  }
+}
+
+run "migrations_follow_the_namespace" {
+  command = plan
+
+  variables {
+    namespace = "home"
+  }
+
+  assert {
+    condition     = strcontains(kubernetes_job_v1.clickhouse_migrations.spec[0].template[0].spec[0].container[0].args[3], "clickhouse.home.svc.cluster.local:9000") && strcontains(kubernetes_job_v1.iceberg_migrations.spec[0].template[0].spec[0].container[0].command[2], "postgres.home.svc.cluster.local:5432")
+    error_message = "The migration Jobs must use the addresses in the given namespace."
+  }
+}
+
 run "secrets" {
   command = apply
 

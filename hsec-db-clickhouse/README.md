@@ -44,7 +44,7 @@ flowchart TB
 flowchart TB
   SP["Spark job: hsec-app-spark"] -- "user spark_writer: SELECT and INSERT" --> HTTP
   GF["Grafana, later"] -- "user grafana_reader: read only" --> HTTP
-  YOU["You: golang-migrate"] -- "user hsec_admin, port-forward to 9000" --> NAT
+  MIG["Job clickhouse-migrations: golang-migrate"] -- "user hsec_admin" --> NAT
   subgraph CH["ClickHouse pod"]
     HTTP["HTTP port 8123"] --> DB
     NAT["Native port 9000"] --> DB
@@ -97,9 +97,11 @@ The profile `read_only` sets `readonly = 2`. It allows query settings, which Gra
 
 ## Migrate
 
-Terraform creates no tables. You run the migrations by hand with golang-migrate 4.20.1, after `terraform/010-workload` and before `terraform/020-app`. golang-migrate records the applied version in `hsec.schema_migrations`.
+`terraform/010-workload` runs the migrations with golang-migrate 4.20.1, in the Job `clickhouse-migrations-<hash>`, after ClickHouse is ready. See [Migrations](../terraform/010-workload/README.md#migrations). golang-migrate records the applied version in `hsec.schema_migrations`.
 
 The database `hsec` exists already, because the pod sets `CLICKHOUSE_DB=hsec`, and the image creates the database at its first start.
+
+To run the migrations by hand, for example to test a new file, do these steps:
 
 1. In a first terminal, run `kubectl -n hsec port-forward svc/clickhouse 9000:9000`.
 2. In a second terminal, go to the repository root.
@@ -112,7 +114,7 @@ migrate -path hsec-db-clickhouse/migrations \
   up
 ```
 
-- The ClickHouse driver of golang-migrate loads the server time zone. So the admin machine needs its time zone database, which macOS and Linux include.
+- The ClickHouse driver of golang-migrate loads the server time zone. So the admin machine needs its time zone database, which macOS and Linux include. The Job mounts the time zone database of the node.
 - If a file fails part way, golang-migrate marks the version as dirty and stops. Undo the partial change by hand. Then run `migrate force <last good version>` and `migrate up` again.
 - To add a migration, run `migrate create -ext sql -dir migrations -seq -digits 4 <name>` in this folder. Never change a file after it ran on the cluster.
 

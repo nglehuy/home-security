@@ -8,6 +8,21 @@ This is Terraform root 1. You apply it first. It creates the base that the apps 
 - All passwords, with `random_password`, and all Kubernetes Secrets.
 - The network policies of the namespace `hsec`.
 - The modules `hsec-db-rustfs`, `hsec-q-redpanda`, `hsec-q-mqtt`, `hsec-db-clickhouse`, and `hsec-db-iceberg`.
+- The schema migrations, in `migrations.tf`. See [Migrations](#migrations).
+
+## Migrations
+
+Two Jobs run the files in `hsec-db-clickhouse/migrations` and `hsec-db-iceberg/migrations`. Each Job gets its files from a ConfigMap.
+
+| Job | Image | Runs after | What it does |
+| --- | --- | --- | --- |
+| `clickhouse-migrations-<hash>` | `migrate/migrate:v4.20.1` | ClickHouse | `migrate up` as `hsec_admin`. golang-migrate records the version in `hsec.schema_migrations`. |
+| `iceberg-migrations-<hash>` | `apache/spark:4.0.4-scala2.13-java17-ubuntu` | Postgres and RustFS | `spark-sql` on each `.up.sql` file, in order. `--packages` downloads the Iceberg, AWS, and Postgres jars from Maven Central. |
+
+- The hash in each Job name comes from its files. If a file changes, the hash changes, and the Job runs again. Otherwise it does not run again.
+- Nothing records which Iceberg files ran. So each Iceberg file must change nothing on a second run.
+- The ClickHouse driver loads the time zone of the server, and the `migrate` image has no time zone data. So the Job mounts `/usr/share/zoneinfo` of the node, read-only.
+- Terraform waits until each Job completes. If a Job fails, the apply fails. Read its log with `kubectl -n hsec logs job/<name>`.
 
 ## Before you apply
 
@@ -38,11 +53,11 @@ Terraform stores the state in a Kubernetes Secret in `kube-system`, with the suf
 
 ## Next step
 
-Build and push the two custom images. Run the ClickHouse and the Iceberg migrations. Then apply `terraform/020-app`. See its [README](../020-app/README.md).
+Build and push the two custom images. Then apply `terraform/020-app`. See its [README](../020-app/README.md).
 
 ## Test
 
-Run `terraform validate` and `terraform test`. The tests cover the module calls, the Secrets, and the network policies.
+Run `terraform validate` and `terraform test`. The tests cover the module calls, the Secrets, the network policies, and the migration Jobs.
 
 ## Details
 

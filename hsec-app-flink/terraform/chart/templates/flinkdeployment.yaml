@@ -28,6 +28,8 @@ spec:
     s3.path.style.access: "true"
     s3.access-key: {{ required "s3AccessKey is required" .Values.s3AccessKey | quote }}
     s3.secret-key: {{ required "s3SecretKey is required" .Values.s3SecretKey | quote }}
+    # The operator starts a failed job again, for example after a missing table.
+    kubernetes.operator.job.restart.failed: "true"
   podTemplate:
     metadata:
       labels:

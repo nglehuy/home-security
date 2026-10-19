@@ -78,7 +78,7 @@ Shared folders:
 
 | Folder | Contents |
 | --- | --- |
-| `terraform/010-workload` | Terraform root 1: the namespace `hsec`, passwords, Secrets, network policies, and the data services |
+| `terraform/010-workload` | Terraform root 1: the namespace `hsec`, passwords, Secrets, network policies, the data services, and the schema migration Jobs |
 | `terraform/020-app` | Terraform root 2: Frigate, the Redpanda Connect bridge and notifier, Flink, and Spark |
 | `docs` | Design documents |
 | `tests` | The end-to-end smoke test |
@@ -116,7 +116,7 @@ Terraform has two root modules in `terraform/`. Each root has its own state, and
 
 | Root | Creates directly | Calls the modules |
 | --- | --- | --- |
-| `terraform/010-workload` | Namespace `hsec`, passwords, all Kubernetes Secrets, network policies | `hsec-db-rustfs`, `hsec-q-redpanda`, `hsec-q-mqtt`, `hsec-db-clickhouse`, `hsec-db-iceberg` |
+| `terraform/010-workload` | Namespace `hsec`, passwords, all Kubernetes Secrets, network policies, schema migration Jobs | `hsec-db-rustfs`, `hsec-q-redpanda`, `hsec-q-mqtt`, `hsec-db-clickhouse`, `hsec-db-iceberg` |
 | `terraform/020-app` | nothing | `hsec-app-frigate`, `hsec-conn-mqtt`, `hsec-conn-discord`, `hsec-app-flink`, `hsec-app-spark` |
 
 `hsec-app-flink` and `hsec-app-spark` each install an operator and a job in the same apply. The job is a custom resource of the operator CRDs. A `kubernetes_manifest` resource reads the CRD from the cluster during the plan [1], so it fails on a fresh cluster. So each job is a small local Helm chart in `<app>/terraform/chart/`. The module installs the operator chart and then the job chart, both with `helm_release`. The job release has `depends_on` on the operator release. Helm checks the custom resource only at install time. At that point, the operator CRDs already exist.
@@ -234,7 +234,7 @@ docker buildx build --platform linux/amd64 -t <registry>/hsec-app-spark:<tag> --
 
 ## Schema migrations
 
-Terraform creates no tables, and the Flink and Spark jobs never create or change tables. You run the schema migrations by hand. If a table is missing, the Flink job fails at start, and a Spark run fails at its first write.
+The root `terraform/010-workload` runs the schema migrations as two Jobs. See [Migrations](../terraform/010-workload/README.md#migrations). The Flink and Spark jobs never create or change tables. If a table is missing, the Flink job fails at start, and a Spark run fails.
 
 Rules:
 
@@ -242,8 +242,9 @@ Rules:
 - The file names use the golang-migrate format with a 4-digit sequence, for example `0001_init.up.sql` [37].
 - To add a file, run `migrate create -ext sql -dir migrations -seq -digits 4 <name>` in the app folder.
 - Never change a file after it ran on the cluster. Write a new file instead.
-- On a fresh cluster, run the migrations after `terraform/010-workload` and before `terraform/020-app`. See [Roots](#roots).
-- If a new job version needs a schema change, run the migration before you deploy that job version.
+- The Jobs run in `terraform/010-workload`, so they complete before `terraform/020-app` starts the jobs. See [Roots](#roots).
+- Each Job name ends with a hash of its files. If a file changes, a new Job runs.
+- If a new job version needs a schema change, push the migration with that job version. The deploy applies `terraform/010-workload` first.
 
 ### ClickHouse migrations
 
@@ -253,9 +254,11 @@ golang-migrate 4.20.1 runs the ClickHouse migrations with its ClickHouse driver 
 - golang-migrate records the applied version in the table `hsec.schema_migrations`.
 - The driver uses the native protocol on port 9000. The URL has `x-multi-statement=true`, because one file holds several statements [38].
 - The driver connects to the database `hsec`, so the database must exist first. The ClickHouse pod sets `CLICKHOUSE_DB=hsec`, and the image creates the database at its first start [39].
-- The user is `hsec_admin`. The root `terraform/010-workload` stores its password in the Secret `clickhouse-admin` as `CLICKHOUSE_ADMIN_PASSWORD`. No pod uses this Secret. It is only for the migrations.
+- The user is `hsec_admin`. The root `terraform/010-workload` stores its password in the Secret `clickhouse-admin` as `CLICKHOUSE_ADMIN_PASSWORD`. Only the migration Job uses this Secret.
 
-To run the migrations from the admin machine, open a port forward in a first terminal:
+The Job `clickhouse-migrations-<hash>` runs `migrate up` with the image `migrate/migrate:v4.20.1`, against `clickhouse.<namespace>.svc.cluster.local:9000`. A ConfigMap holds the files. The driver loads the time zone of the server, and the image has no time zone data. So the Job mounts `/usr/share/zoneinfo` of the node, read-only.
+
+To run the migrations by hand from the admin machine, open a port forward in a first terminal:
 
 ```sh
 kubectl -n hsec port-forward svc/clickhouse 9000:9000
@@ -276,10 +279,10 @@ If a file fails part way, golang-migrate marks the version as dirty and stops [3
 
 ### Iceberg migrations
 
-golang-migrate has no driver for Spark or Iceberg [37]. An Iceberg table change must write new metadata files to RustFS through an Iceberg engine. So the Iceberg migrations use the golang-migrate file names, but a local `spark-sql` runs them.
+golang-migrate has no driver for Spark or Iceberg [37]. An Iceberg table change must write new metadata files to RustFS through an Iceberg engine. So the Iceberg migrations use the golang-migrate file names, but `spark-sql` runs them.
 
 - The folder has only `.up.sql` files. A dropped Iceberg table loses its data, so no `.down.sql` files exist.
-- Nothing records which files ran. You run each file once, in order.
+- Nothing records which files ran. If a file changes, the Job runs every file again, in order. So each file must change nothing on a second run.
 - `0001_init.up.sql` uses `IF NOT EXISTS`, and `WRITE ORDERED BY` gives the same result each time. So a second run of this file changes nothing.
 - Spark SQL `timestamp` creates an Iceberg `timestamptz` column, and `array<string>` creates a list of strings [40].
 - `PARTITIONED BY (days(event_ts))` creates the daily partition. `WRITE ORDERED BY` sets the sort order, and it needs the Iceberg SQL extensions [41].
@@ -321,7 +324,14 @@ TBLPROPERTIES (
 ALTER TABLE lake.hsec.events WRITE ORDERED BY camera, event_ts;
 ```
 
-You run the Iceberg migrations on the admin machine, through `kubectl port-forward` tunnels to Postgres and RustFS. The admin machine needs Java 17 and Spark 4.0.4 (`spark-4.0.4-bin-hadoop3`), the same Spark version as the batch job.
+The Job `iceberg-migrations-<hash>` runs each file with this setup:
+
+- Image `apache/spark:4.0.4-scala2.13-java17-ubuntu`, the base of the `hsec-app-spark` image. A ConfigMap holds the files.
+- `spark-sql --master local[1]`, with `--packages` for the same jar versions as `migrate.sh`. The pod downloads them from Maven Central.
+- The catalog properties in [Catalog](#catalog), with the in-cluster addresses. The passwords come from the Secret `spark-env`, and go into a file, not onto the command line.
+- Memory 1.5 GiB, CPU request 0.25.
+
+To run a file by hand, for example to test a new file, use the admin machine and `kubectl port-forward` tunnels to Postgres and RustFS. The admin machine needs Java 17 and Spark 4.0.4 (`spark-4.0.4-bin-hadoop3`), the same Spark version as the batch job.
 
 Open each tunnel in its own terminal, and keep both open:
 
@@ -753,6 +763,7 @@ spec:
     s3.path.style.access: "true"
     s3.access-key: <from Terraform>
     s3.secret-key: <from Terraform>
+    kubernetes.operator.job.restart.failed: "true"
   podTemplate:
     spec:
       containers:
@@ -780,6 +791,7 @@ spec:
 | `taskmanager.memory.managed.fraction: 0.05` | Only RocksDB uses managed memory. This leaves more heap for the job. |
 | `execution.checkpointing.interval: 60s` | Iceberg commits once per checkpoint. Data reaches Iceberg within 1 minute. |
 | `high-availability.type: kubernetes` and `upgradeMode: last-state` | After a crash or an upgrade, the job continues from its last checkpoint. |
+| `kubernetes.operator.job.restart.failed: "true"` | The operator starts a failed job again, for example after a missing table [45]. The default is `false`. |
 | `flink-s3-fs-presto` | The Flink docs recommend the Presto S3 file system for checkpoints [16]. |
 | `s3.access-key`, `s3.secret-key` | The Presto file system reads its keys only from the Flink configuration [16]. Anyone who can read FlinkDeployments in `hsec` can read the keys. This is an accepted risk for a home lab with one admin. |
 | `flink-env` Secret | Holds the Postgres password and the RustFS keys for the Iceberg catalog. The job reads them from environment variables. |
@@ -1489,7 +1501,7 @@ The smoke test does these steps:
 ```text
 home-security/
 ├── terraform/
-│   ├── 010-workload/                # root 1: namespace hsec, passwords, Secrets, network policies, data services
+│   ├── 010-workload/                # root 1: namespace hsec, passwords, Secrets, network policies, data services, migrations
 │   │   └── README.md
 │   └── 020-app/                     # root 2: Frigate, bridge, notifier, Flink, Spark
 ├── hsec-app-frigate/
@@ -1638,3 +1650,5 @@ Each app folder and each root in `terraform/` has a `README.md`. Each `<app>/ter
 [43] Apache Iceberg, "`ResolveViews.scala`," GitHub, release 1.12.0. Accessed: Oct. 19, 2026. [Online]. Available: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/spark/v4.0/spark-extensions/src/main/scala/org/apache/spark/sql/catalyst/analysis/ResolveViews.scala
 
 [44] Apache Iceberg, "`JdbcCatalog.java`," GitHub, release 1.12.0. Accessed: Oct. 19, 2026. [Online]. Available: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/core/src/main/java/org/apache/iceberg/jdbc/JdbcCatalog.java
+
+[45] Apache Flink, "Configuration," Flink Kubernetes Operator Documentation. Accessed: Oct. 19, 2026. [Online]. Available: https://nightlies.apache.org/flink/flink-kubernetes-operator-docs-release-1.13/docs/operations/configuration/
