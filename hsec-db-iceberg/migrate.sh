@@ -39,6 +39,7 @@ spark.sql.catalog.lake.type jdbc
 spark.sql.catalog.lake.uri jdbc:postgresql://localhost:$PG_PORT/iceberg_catalog
 spark.sql.catalog.lake.jdbc.user iceberg
 spark.sql.catalog.lake.jdbc.password $(secret POSTGRES_ICEBERG_PASSWORD)
+spark.sql.catalog.lake.jdbc.schema-version V1
 spark.sql.catalog.lake.warehouse s3://hsec-lake/warehouse
 spark.sql.catalog.lake.io-impl org.apache.iceberg.aws.s3.S3FileIO
 spark.sql.catalog.lake.s3.endpoint http://localhost:$S3_PORT

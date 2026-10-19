@@ -47,6 +47,9 @@ public final class BatchConfig {
         c.put(lake + ".uri", require(args, "catalog-uri"));
         c.put(lake + ".jdbc.user", args.getOrDefault("catalog-user", "iceberg"));
         c.put(lake + ".jdbc.password", require(env, "POSTGRES_ICEBERG_PASSWORD"));
+        // V1 adds view support. The Iceberg extensions look up a view before each
+        // table read, and a V0 catalog fails that lookup.
+        c.put(lake + ".jdbc.schema-version", "V1");
         c.put(lake + ".warehouse", require(args, "warehouse"));
         c.put(lake + ".io-impl", "org.apache.iceberg.aws.s3.S3FileIO");
         c.put(lake + ".s3.endpoint", require(args, "s3-endpoint"));

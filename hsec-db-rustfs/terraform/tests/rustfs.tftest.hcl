@@ -17,8 +17,13 @@ run "chart" {
   }
 
   assert {
-    condition     = yamldecode(helm_release.rustfs.values[0]).mode == { standalone = { enabled = true }, distributed = { enabled = false } } && yamldecode(helm_release.rustfs.values[0]).replicaCount == 1
+    condition     = yamldecode(helm_release.rustfs.values[0]).mode.standalone.enabled == true && yamldecode(helm_release.rustfs.values[0]).mode.distributed == { enabled = false } && yamldecode(helm_release.rustfs.values[0]).replicaCount == 1
     error_message = "RustFS must run one standalone pod."
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.rustfs.values[0]).mode.standalone.strategy == { type = "Recreate" }
+    error_message = "RustFS must use the Recreate strategy. With the chart default, Helm does not wait for the pod, and the bucket Job starts too early."
   }
 
   assert {

@@ -77,6 +77,7 @@ The chart `rustfs` 1.0.1 defaults to a distributed cluster with 4 pods. This mod
 | Value | New value | Reason |
 | --- | --- | --- |
 | `mode.standalone.enabled` | `true` | One node |
+| `mode.standalone.strategy.type` | `Recreate` | Helm waits until the pod is ready. With the default `RollingUpdate` and `maxUnavailable: 1`, Helm needs 0 ready pods and does not wait [6]. |
 | `mode.distributed.enabled` | `false` | One node |
 | `replicaCount` | `1` | One pod |
 | `storageclass.name` | The HDD class | Large and cheap storage |
@@ -93,7 +94,7 @@ The chart `rustfs` 1.0.1 defaults to a distributed cluster with 4 pods. This mod
 | Helm release | `rustfs` | Deployment `rustfs`, Service `rustfs-svc` (ports 9000 for S3 and 9001 for the console), and the PVCs `rustfs-data` and `rustfs-logs` |
 | Job | `rustfs-buckets-<hash>` | Creates `hsec-lake` and `hsec-flink` with `amazon/aws-cli`. A second run changes nothing. The name holds a hash of the script. |
 
-If RustFS is not ready yet, the bucket Job fails and tries again, up to 5 times.
+Terraform starts the bucket Job after Helm sees that the RustFS pod is ready. If the Job fails, it tries again, up to 5 times.
 
 Address inside the cluster: `http://rustfs-svc.hsec.svc.cluster.local:9000`. To open the console from the admin machine, run `kubectl -n hsec port-forward svc/rustfs-svc 9001:9001`, then open `http://localhost:9001`.
 
@@ -135,3 +136,5 @@ See [RustFS](../docs/specs.md#rustfs) and [Storage budget](../docs/system-design
 [4] Amazon Web Services, "Virtual hosting of general purpose buckets," Amazon S3 User Guide. Accessed: Oct. 5, 2026. [Online]. Available: https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html
 
 [5] Amazon Web Services, "AWS Signature Version 4 for API requests," IAM User Guide. Accessed: Oct. 5, 2026. [Online]. Available: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html
+
+[6] Helm contributors, "`pkg/kube/ready.go`," GitHub. Accessed: Oct. 19, 2026. [Online]. Available: https://github.com/helm/helm/blob/main/pkg/kube/ready.go

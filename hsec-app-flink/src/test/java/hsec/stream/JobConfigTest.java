@@ -29,6 +29,7 @@ class JobConfigTest {
                 .containsEntry("uri", "jdbc:postgresql://postgres.hsec.svc.cluster.local:5432/iceberg_catalog")
                 .containsEntry("jdbc.user", "iceberg")
                 .containsEntry("jdbc.password", "pg")
+                .containsEntry("jdbc.schema-version", "V1")
                 .containsEntry("warehouse", "s3://hsec-lake/warehouse")
                 .containsEntry("io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
                 .containsEntry("s3.path-style-access", "true")

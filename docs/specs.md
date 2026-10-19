@@ -354,6 +354,7 @@ spark-sql --master "local[1]" \
   --conf spark.sql.catalog.lake.uri=jdbc:postgresql://localhost:15432/iceberg_catalog \
   --conf spark.sql.catalog.lake.jdbc.user=iceberg \
   --conf spark.sql.catalog.lake.jdbc.password="$POSTGRES_ICEBERG_PASSWORD" \
+  --conf spark.sql.catalog.lake.jdbc.schema-version=V1 \
   --conf spark.sql.catalog.lake.warehouse=s3://hsec-lake/warehouse \
   --conf spark.sql.catalog.lake.io-impl=org.apache.iceberg.aws.s3.S3FileIO \
   --conf spark.sql.catalog.lake.s3.endpoint=http://localhost:19000 \
@@ -948,6 +949,7 @@ Flink, Spark, and the Iceberg migrations use the same catalog properties. All th
 | `uri` | `jdbc:postgresql://postgres.hsec.svc.cluster.local:5432/iceberg_catalog` |
 | `jdbc.user` | `iceberg` |
 | `jdbc.password` | From `POSTGRES_ICEBERG_PASSWORD` |
+| `jdbc.schema-version` | `V1` (view support) |
 | `warehouse` | `s3://hsec-lake/warehouse` |
 | `io-impl` | `org.apache.iceberg.aws.s3.S3FileIO` |
 | `s3.endpoint` | `http://rustfs-svc.hsec.svc.cluster.local:9000` |
@@ -957,6 +959,13 @@ Flink, Spark, and the Iceberg migrations use the same catalog properties. All th
 | `client.region` | `us-east-1` (RustFS ignores it, but the AWS SDK needs a value) |
 
 The JDBC catalog needs a database with atomic transactions [17]. Postgres has them.
+
+`jdbc.schema-version` must be `V1`. The default `V0` has no view support, and the Spark job fails on its first table read:
+
+- Before each table read, the Iceberg Spark extensions look for a view with the same name [43].
+- A `V0` catalog throws `UnsupportedOperationException` for that lookup, and Spark does not catch it [44].
+- When a client starts with `V1`, the catalog adds the column `iceberg_type` to the table `iceberg_tables`. Rows with no type stay tables [44].
+- After that change, each client uses `V1`, also without the property.
 
 ### Tables
 
@@ -1065,6 +1074,7 @@ Folder: `hsec-db-rustfs`.
 | Value | New value |
 | --- | --- |
 | `mode.standalone.enabled` | `true` |
+| `mode.standalone.strategy.type` | `Recreate`, so that Helm waits until the pod is ready [42] |
 | `mode.distributed.enabled` | `false` |
 | `replicaCount` | `1` |
 | `storageclass.name` | `var.hdd_storage_class` |
@@ -1621,3 +1631,9 @@ Each app folder and each root in `terraform/` has a `README.md`. Each `<app>/ter
 [40] Apache Iceberg, "Spark Getting Started: Type compatibility," Apache Iceberg Documentation. Accessed: Oct. 4, 2026. [Online]. Available: https://iceberg.apache.org/docs/latest/spark-getting-started/#type-compatibility
 
 [41] Apache Iceberg, "Spark DDL," Apache Iceberg Documentation. Accessed: Oct. 4, 2026. [Online]. Available: https://iceberg.apache.org/docs/latest/spark-ddl/
+
+[42] Helm contributors, "`pkg/kube/ready.go`," GitHub. Accessed: Oct. 19, 2026. [Online]. Available: https://github.com/helm/helm/blob/main/pkg/kube/ready.go
+
+[43] Apache Iceberg, "`ResolveViews.scala`," GitHub, release 1.12.0. Accessed: Oct. 19, 2026. [Online]. Available: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/spark/v4.0/spark-extensions/src/main/scala/org/apache/spark/sql/catalyst/analysis/ResolveViews.scala
+
+[44] Apache Iceberg, "`JdbcCatalog.java`," GitHub, release 1.12.0. Accessed: Oct. 19, 2026. [Online]. Available: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/core/src/main/java/org/apache/iceberg/jdbc/JdbcCatalog.java

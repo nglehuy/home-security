@@ -28,6 +28,7 @@ class BatchConfigTest {
                 .containsEntry("spark.sql.session.timeZone", "Asia/Singapore")
                 .containsEntry("spark.sql.catalog.lake.type", "jdbc")
                 .containsEntry("spark.sql.catalog.lake.jdbc.password", "pg")
+                .containsEntry("spark.sql.catalog.lake.jdbc.schema-version", "V1")
                 .containsEntry("spark.sql.catalog.lake.s3.secret-access-key", "sk")
                 .containsEntry("spark.sql.catalog.clickhouse", "com.clickhouse.spark.ClickHouseCatalog")
                 .containsEntry("spark.sql.catalog.clickhouse.host", "clickhouse.hsec.svc.cluster.local")

@@ -28,6 +28,12 @@ resource "helm_release" "rustfs" {
     mode = {
       standalone = {
         enabled = true
+        # The chart default is RollingUpdate with maxUnavailable 1. With one
+        # pod, Helm then needs 0 ready pods and does not wait, so the bucket
+        # Job starts before RustFS is ready. With Recreate, Helm waits.
+        strategy = {
+          type = "Recreate"
+        }
       }
       distributed = {
         enabled = false

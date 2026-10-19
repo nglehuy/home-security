@@ -39,6 +39,8 @@ public final class JobConfig implements Serializable {
         catalog.put("uri", require(a, "catalog-uri"));
         catalog.put("jdbc.user", a.getOrDefault("catalog-user", "iceberg"));
         catalog.put("jdbc.password", require(env, "POSTGRES_ICEBERG_PASSWORD"));
+        // The same catalog schema as Spark, which needs V1 for view support.
+        catalog.put("jdbc.schema-version", "V1");
         catalog.put("warehouse", require(a, "warehouse"));
         catalog.put("io-impl", "org.apache.iceberg.aws.s3.S3FileIO");
         catalog.put("s3.endpoint", require(a, "s3-endpoint"));
