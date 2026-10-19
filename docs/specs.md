@@ -408,7 +408,7 @@ The source is the example Docker Compose file in the Frigate installation docs [
 ### Pod
 
 - Init container `seed-config`: uses the Frigate image and runs `cp /seed/config.yml /config/config.yml` on each start. `/seed` is a ConfigMap that Terraform renders from `hsec-app-frigate/config.seed.yml.tftpl`.
-- Pod annotation `hsec/cameras-sha256 = sha256(jsonencode(var.cameras))`. A camera change starts a new pod. See [ADR-8](system-design.md#adr-8-terraform-owns-the-frigate-configuration).
+- Pod annotation `hsec/config-sha256`, the SHA-256 of the rendered configuration. Any change of the ConfigMap starts a new pod. See [ADR-8](system-design.md#adr-8-terraform-owns-the-frigate-configuration).
 - Environment from the Secret `frigate-env`: `FRIGATE_RTSP_PASSWORD`, `FRIGATE_MQTT_USER`, `FRIGATE_MQTT_PASSWORD`.
 - Resources: CPU request 1, memory 3 GiB (request and limit), `gpu.intel.com/i915: 1`. Memory-backed volumes count toward the memory limit.
 - Startup probe: `GET /api/version` on port 5000, every 10 seconds, up to 60 failures. The first start downloads models and takes several minutes.
@@ -434,7 +434,7 @@ detectors:
     device: GPU
 
 ffmpeg:
-  hwaccel_args: preset-vaapi
+  hwaccel_args: preset-intel-qsv-h264
 
 face_recognition:
   enabled: true
@@ -479,7 +479,7 @@ Rules:
 - Copy the `model` block for the default OpenVINO model from the Frigate docs [5]. The default model is SSDLite MobileNet v2.
 - `record`: Frigate keeps only the video of alerts and detections, for 14 days [27]. It builds the alert clips from this video [28]. See [Alert media](#alert-media).
 - `qos: 1`: the default is 0, which sends each message once with no retry [6].
-- `preset-vaapi`: the Frigate docs list it for Intel Gen 8 to Gen 12 graphics [7]. UHD 620 is Gen 9.5.
+- `preset-intel-qsv-h264`: the Frigate docs list `preset-vaapi` and the Quick Sync presets for Intel Gen 8 to Gen 12 graphics [7]. UHD 620 is Gen 9.5. On this host, `preset-vaapi` failed about every 9 minutes with `Failed to sync surface`, so the configuration uses Quick Sync.
 - `model_size: small`: this face model runs on the CPU [8].
 - If OpenVINO fails on the UHD 620, change `device: GPU` to `device: CPU`. Then remove the GPU request from the pod.
 - Keep the default MQTT topic prefix `frigate`. The bridge topic names depend on it.

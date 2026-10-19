@@ -20,7 +20,9 @@ model:
   labelmap_path: /openvino-model/coco_91cl_bkgr.txt
 
 ffmpeg:
-  hwaccel_args: preset-vaapi
+  # Intel Quick Sync. preset-vaapi failed about every 9 minutes on the UHD 620
+  # with "Failed to sync surface".
+  hwaccel_args: preset-intel-qsv-h264
 
 face_recognition:
   enabled: true

@@ -55,6 +55,11 @@ run "seed_configuration" {
   }
 
   assert {
+    condition     = yamldecode(kubernetes_config_map_v1.seed.data["config.yml"]).ffmpeg == { hwaccel_args = "preset-intel-qsv-h264" }
+    error_message = "ffmpeg must decode with Intel Quick Sync, because VAAPI failed now and then on the UHD 620."
+  }
+
+  assert {
     condition     = yamldecode(kubernetes_config_map_v1.seed.data["config.yml"]).record == { enabled = true, continuous = { days = 0 }, motion = { days = 0 }, alerts = { retain = { days = 14 } }, detections = { retain = { days = 14 } } }
     error_message = "Frigate must keep only alert and detection video, for 14 days."
   }
@@ -89,8 +94,8 @@ run "pod" {
   }
 
   assert {
-    condition     = kubernetes_deployment_v1.frigate.spec[0].template[0].metadata[0].annotations["hsec/cameras-sha256"] == sha256(jsonencode(var.cameras))
-    error_message = "The pod must carry the hash of the cameras, so a camera change starts a new pod."
+    condition     = kubernetes_deployment_v1.frigate.spec[0].template[0].metadata[0].annotations == tomap({ "hsec/config-sha256" = sha256(kubernetes_config_map_v1.seed.data["config.yml"]) })
+    error_message = "The pod must carry the hash of the rendered configuration, so any change of the ConfigMap starts a new pod."
   }
 
   assert {

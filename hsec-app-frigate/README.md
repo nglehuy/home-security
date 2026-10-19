@@ -19,7 +19,7 @@ flowchart TB
 ```
 
 1. Each camera sends two RTSP streams: a small stream for detection and a full stream for recording.
-2. Frigate decodes the detect stream with VAAPI (Video Acceleration API, hardware video decode) on the Intel UHD 620. OpenVINO finds objects on the same GPU. Face recognition runs on the CPU.
+2. Frigate decodes the detect stream with Intel Quick Sync (hardware video decode) on the Intel UHD 620. OpenVINO finds objects on the same GPU. Face recognition runs on the CPU.
 3. Frigate records only the video around alerts and detections, and keeps it for 14 days. Snapshots stay for 30 days.
 4. Frigate publishes events, reviews, object updates, and status messages under the MQTT prefix `frigate/`.
 5. LAN clients use the web UI on port 8971, which needs a login. Port 5000 has no login. A network policy lets only the Flink TaskManager reach it, for alert snapshots and clips.
@@ -28,16 +28,16 @@ flowchart TB
 
 `config.seed.yml.tftpl` is the Frigate configuration. Terraform renders it with the namespace and the cameras, and stores it in the ConfigMap `frigate-seed`. On each start, the init container `seed-config` copies the file to `/config/config.yml`. So Terraform owns the configuration. See [ADR-8](../docs/system-design.md#adr-8-terraform-owns-the-frigate-configuration).
 
-- The pod template has the annotation `hsec/cameras-sha256`, a hash of the variable `cameras`. When you change a camera and apply, Kubernetes starts a new pod with the new configuration.
+- The pod template has the annotation `hsec/config-sha256`, a hash of the rendered configuration. When you change the template or a camera and apply, Kubernetes starts a new pod with the new configuration.
 - A restart removes changes that you make in the Frigate UI. Copy zones and masks from the UI into the template.
-- A template change without a camera change reaches Frigate at the next restart. To restart now, run `kubectl -n hsec rollout restart deploy/frigate`.
+- The password `FRIGATE_RTSP_PASSWORD` is not in the ConfigMap, and Frigate reads it at start. If you change only that password, run `kubectl -n hsec rollout restart deploy/frigate` after the apply.
 
 | Section | Value | Reason |
 | --- | --- | --- |
 | `mqtt` | `mosquitto.<namespace>.svc.cluster.local:1883`, QoS 1 | Mosquitto sends each message again until the bridge has it. |
 | `detectors` | OpenVINO on `GPU` | Object detection on the UHD 620 |
 | `model` | SSDLite MobileNet v2, 300 x 300 pixels | The OpenVINO model in the Frigate image |
-| `ffmpeg` | `preset-vaapi` | Hardware decode on Intel Gen 8 to Gen 12 graphics |
+| `ffmpeg` | `preset-intel-qsv-h264` | Hardware decode of H.264 on Intel Gen 8 to Gen 12 graphics. `preset-vaapi` failed about every 9 minutes on the UHD 620 with `Failed to sync surface`. |
 | `face_recognition` | `small` model | Runs on the CPU |
 | `record` | Alerts and detections 14 days, other video 0 days | Only video with a detection stays. |
 | `snapshots` | 30 days | The retention limit of the system |

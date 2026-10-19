@@ -431,13 +431,13 @@ Kubernetes restarts each failed pod. The table shows what else happens.
 - Context: Frigate 0.18 can edit its configuration file from its web UI. You draw zones and masks in the UI. The cameras come from the Terraform variable `cameras`.
 - Decision:
   - On each start, an init container copies the file that Terraform renders to `config.yml` on the SSD volume.
-  - The pod template has the annotation `hsec/cameras-sha256`, a hash of `cameras`. So a camera change starts a new pod.
+  - The pod template has the annotation `hsec/config-sha256`, a hash of the rendered configuration. So any change of the ConfigMap starts a new pod.
 - Alternatives:
   - Seed once: if `config.yml` does not exist, the init container copies the file. After that, the UI owns the file, and camera changes in Terraform do not reach a running system.
   - Mount the file read-only. Then UI edits fail.
 - Consequences:
   - A restart, also a node reboot, removes UI edits. Copy zones and masks into `hsec-app-frigate/config.seed.yml.tftpl`.
-  - A template change without a camera change reaches Frigate at the next restart.
+  - A password change in the Secret `frigate-env` does not change the ConfigMap. It reaches Frigate at the next restart.
 
 ### ADR-9: Detection on the UHD 620, with a CPU fallback
 
@@ -446,12 +446,13 @@ Kubernetes restarts each failed pod. The table shows what else happens.
   - The host has an Intel UHD 620 (Gen 9.5) and an AMD Radeon R5 M435. OpenVINO supports Intel GPUs from 6th Gen [16].
   - The Frigate ROCm detector needs an AMD GPU that ROCm supports. The current ROCm release supports only much newer chips than the R5 M435 [26].
 - Decision:
-  - The OpenVINO detector on `GPU`, and VAAPI video decode (`preset-vaapi`) [17], both on the UHD 620. Face recognition uses the `small` model on the CPU [18].
+  - The OpenVINO detector on `GPU`, and Intel Quick Sync video decode (`preset-intel-qsv-h264`) [17], both on the UHD 620. Face recognition uses the `small` model on the CPU [18].
   - The Intel GPU plugin gives Frigate only the Intel render node. If Frigate sees one render node, it uses that node [28].
   - The AMD GPU stays unused.
 - Alternatives:
   - The ROCm detector on the AMD GPU. ROCm does not support it.
   - Detection on the CPU. It works, but it uses much more CPU. If the GPU fails, the CPU is the fallback.
+  - VAAPI video decode (`preset-vaapi`), the Frigate default for this GPU [17]. On this host, it failed about every 9 minutes with `Failed to sync surface`, and detection stopped for about one second each time.
 - Consequences: on the first start, make sure that Frigate shows the GPU detector in its system page.
 
 ### ADR-10: Retention of 30 days or less

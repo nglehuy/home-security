@@ -89,10 +89,10 @@ resource "kubernetes_deployment_v1" "frigate" {
     template {
       metadata {
         labels = local.labels
-        # A camera change changes the pod template, so Kubernetes starts a new
-        # pod, and the init container copies the new configuration.
+        # A change of the ConfigMap changes the pod template, so Kubernetes
+        # starts a new pod, and the init container copies the new configuration.
         annotations = {
-          "hsec/cameras-sha256" = sha256(jsonencode(var.cameras))
+          "hsec/config-sha256" = sha256(local.seed_config)
         }
       }
 
