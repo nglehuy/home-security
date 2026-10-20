@@ -31,6 +31,17 @@ variable "hdd_storage_class" {
   type        = string
 }
 
+variable "domain" {
+  description = "Local DNS domain of the web UIs. hsec.home.arpa uses the special-use name for home networks (RFC 8375). RustFS gets rustfs.<domain>."
+  type        = string
+  default     = "hsec.home.arpa"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", var.domain))
+    error_message = "domain must be a DNS name in lowercase, without a scheme, a port, or a path."
+  }
+}
+
 variable "grafana_namespace" {
   description = "Namespace of the Grafana pods. If set, a network policy lets them reach ClickHouse on port 8123."
   type        = string

@@ -31,9 +31,9 @@ The input yields batches of at most 1 byte, which means one message per batch, a
 | `kind: start` with `image_jpeg` | `Alert on <camera> at <local time>: <objects>. Zones: <zones>.` | `alert.jpg` |
 | `kind: start` without an image | The same text | None |
 | `kind: clip` with `clip_mp4` | `Clip <part> of <part_count> for the alert on <camera> at <local time>.` | `alert.mp4` |
-| `kind: clip` without a clip | `Clip <part> of <part_count> for the alert on <camera> at <local time> is not attached. Frigate link: <clip_url>` | None |
+| `kind: clip` without a clip | `Clip <part> of <part_count> for the alert on <camera> at <local time> is not attached.` | None |
 
-The local time comes from `review_start` and the time zone in `TZ`. The Frigate link needs a Frigate login. A clip part above 19 MiB has no file, because Discord accepts files of up to 20 MiB.
+The local time comes from `review_start` and the time zone in `TZ`. A clip part above 19 MiB has no file, because Discord accepts files of up to 20 MiB. A failed download also gives a part without a file. The text has no Frigate link. To see that part, open the review in the Frigate UI.
 
 Errors:
 

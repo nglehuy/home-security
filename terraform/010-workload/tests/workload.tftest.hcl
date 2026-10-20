@@ -152,6 +152,21 @@ run "network_policies" {
   }
 
   assert {
+    condition     = kubernetes_network_policy_v1.traefik.spec[0].pod_selector[0].match_expressions[0].operator == "In" && kubernetes_network_policy_v1.traefik.spec[0].pod_selector[0].match_expressions[0].values == toset(["hsec-stream", "rustfs"])
+    error_message = "The Traefik policy must select only the Flink and RustFS pods."
+  }
+
+  assert {
+    condition     = [for p in kubernetes_network_policy_v1.traefik.spec[0].ingress[0].ports : p.port] == ["8081", "9001"]
+    error_message = "Traefik may reach only the Flink UI port and the RustFS console port."
+  }
+
+  assert {
+    condition     = kubernetes_network_policy_v1.traefik.spec[0].ingress[0].from[0].namespace_selector[0].match_labels == tomap({ "kubernetes.io/metadata.name" = "kube-system" }) && kubernetes_network_policy_v1.traefik.spec[0].ingress[0].from[0].pod_selector[0].match_labels == tomap({ "app.kubernetes.io/name" = "traefik" })
+    error_message = "Only the Traefik pod in kube-system may use the Traefik rule."
+  }
+
+  assert {
     condition     = length(kubernetes_network_policy_v1.clickhouse_grafana) == 0
     error_message = "Without grafana_namespace, there is no Grafana rule."
   }
@@ -178,4 +193,23 @@ run "rejects_a_webhook_without_https" {
   }
 
   expect_failures = [var.discord_webhook_url]
+}
+
+run "rejects_a_domain_with_a_scheme" {
+  command = plan
+
+  variables {
+    domain = "http://home.lan"
+  }
+
+  expect_failures = [var.domain]
+}
+
+run "domain_default" {
+  command = plan
+
+  assert {
+    condition     = var.domain == "hsec.home.arpa"
+    error_message = "The default domain must be hsec.home.arpa, the special-use name for home networks (RFC 8375)."
+  }
 }

@@ -18,3 +18,8 @@ variable "root_secret_name" {
   description = "Secret with RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY."
   type        = string
 }
+
+variable "ingress_host" {
+  description = "Host name of the RustFS console on Traefik, for example rustfs.hsec.home.arpa."
+  type        = string
+}

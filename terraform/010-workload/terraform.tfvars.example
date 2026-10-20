@@ -6,7 +6,8 @@ ssd_storage_class = "local-ssd"
 hdd_storage_class = "local-hdd"
 
 # Optional. Defaults: kubeconfig_path = "~/.kube/config", namespace = "hsec",
-# timezone = "Asia/Singapore", grafana_namespace = null.
+# timezone = "Asia/Singapore", grafana_namespace = null,
+# domain = "hsec.home.arpa". RustFS gets rustfs.<domain>.
 # grafana_namespace = "monitoring"
 
 # Sensitive.

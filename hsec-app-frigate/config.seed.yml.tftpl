@@ -6,6 +6,10 @@ mqtt:
   password: "{FRIGATE_MQTT_PASSWORD}"
   qos: 1
 
+# Port 8971 serves plain HTTP, so Traefik can route to it. The login stays.
+tls:
+  enabled: false
+
 detectors:
   ov:
     type: openvino

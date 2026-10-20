@@ -9,8 +9,6 @@ image_registry  = "registry.lan:5000"
 flink_image_tag = "1.0.0"
 spark_image_tag = "1.0.0"
 
-frigate_url = "https://192.168.1.17:8971"
-
 # Frigate replaces {FRIGATE_RTSP_PASSWORD} with the camera password from
 # frigate_rtsp_password in terraform/010-workload.
 cameras = {
@@ -23,4 +21,6 @@ cameras = {
 }
 
 # Optional. Defaults: kubeconfig_path = "~/.kube/config", namespace = "hsec",
-# timezone = "Asia/Singapore", night_start = "23:00", night_end = "06:00".
+# timezone = "Asia/Singapore", night_start = "23:00", night_end = "06:00",
+# domain = "hsec.home.arpa". Frigate gets frigate.<domain>, and Flink gets
+# flink.<domain>.

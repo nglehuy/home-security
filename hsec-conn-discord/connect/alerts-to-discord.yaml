@@ -1,6 +1,6 @@
 # Posts each alert message from hsec.alerts to Discord.
 # Message 1 (kind start) carries the snapshot image. Each clip part (kind clip)
-# carries one MP4 file, or a Frigate link when the part was too big.
+# carries one MP4 file, or only a text when the file is missing.
 input:
   redpanda:
     seed_brokers: [ "redpanda-0.redpanda.${NAMESPACE:hsec}.svc.cluster.local:9093" ]
@@ -22,7 +22,7 @@ pipeline:
         } else if this.clip_mp4 != null {
           "Clip %v of %v for the alert on %v at %v.".format(this.part, this.part_count, this.camera, $when)
         } else {
-          "Clip %v of %v for the alert on %v at %v is not attached. Frigate link: %v".format(this.part, this.part_count, this.camera, $when, this.clip_url)
+          "Clip %v of %v for the alert on %v at %v is not attached.".format(this.part, this.part_count, this.camera, $when)
         }
         meta payload_json = { "username": "Home security", "content": $text }.format_json().string()
         meta media_case = if this.image_jpeg.or(null) != null { "image" } else if this.clip_mp4.or(null) != null { "clip" } else { "none" }

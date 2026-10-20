@@ -73,11 +73,12 @@ This design needs the system below. It does not install or change these parts.
 | Node CPU | The 8 CPU threads are shared with the Fedora desktop. The project requests up to 4.3 CPU. | `kubectl describe node <node>` |
 | SSD storage class | An existing class on the 100 GB SSD, with at least 20 GiB free. The volumes are local to the node. The file system is XFS or ext4. | `kubectl get storageclass` and `df -T` on the host |
 | HDD storage class | An existing class on the 1 TB HDD, with at least 300 GiB free. | `kubectl get storageclass` and `df -h` on the host |
-| k3s features | The embedded network policy controller and ServiceLB are on. Both are k3s defaults [1]. | No `--disable-network-policy` and no `--disable=servicelb` in the k3s configuration. |
+| k3s features | The embedded network policy controller, ServiceLB, and Traefik are on. All three are k3s defaults [1]. | No `--disable-network-policy`, no `--disable=servicelb`, and no `--disable traefik` in the k3s configuration. |
 | Camera network | The cameras are on the same LAN as the node and use RTSP (TCP 554). Their internet access is blocked on the router. | `ffprobe rtsp://...` from the host |
-| Node address | The node has a fixed LAN address, for example a DHCP reservation for 192.168.1.17. LAN clients and the alert links use it. | The DHCP page of the router |
+| Node address | The node has a fixed LAN address, for example a DHCP reservation for 192.168.1.17. LAN clients use it. | The DHCP page of the router |
 | Internet | Pods can reach `discord.com` on TCP 443. Frigate downloads its face models on first start. | `curl -I https://discord.com` from a pod. |
-| LAN access | LAN and WireGuard clients can reach the node address on ports 8971, 8554, and 8555. | Open `https://192.168.1.17:8971` from a LAN client. |
+| LAN access | LAN and WireGuard clients can reach the node address on ports 80, 8971, 8554, and 8555. | Open `http://192.168.1.17:8971` from a LAN client. |
+| Web UI names | The local DNS domain `hsec.home.arpa`, or the value of the variable `domain`, in Tailscale DNS. The names `frigate`, `flink`, and `rustfs` under it point to the node. | `nslookup frigate.hsec.home.arpa` from a tailnet client |
 | Grafana | Existing Grafana with the `grafana-clickhouse-datasource` plugin. A service account token with the Admin role. | Grafana plugin list and service account page. |
 | Admin machine | Terraform 1.16, kubectl, and Docker with `buildx`. A kubeconfig with cluster-admin rights. To run a migration by hand, also golang-migrate 4.20.1, Java 17, and Spark 4.0.4. | `terraform version`, `kubectl auth can-i '*' '*'` |
 | Image registry | A registry that the cluster can pull from, for the two custom images (Flink job and Spark job). | `docker push` from the admin machine and a test pull on the node. |
@@ -121,7 +122,7 @@ flowchart TB
     CLIP[GET clip for the window]
     SZ{Clip at most 19 MiB?}
     M2[Message: clip part i of n]
-    M3[Message: link to part i of n]
+    M3[Message: part i of n,<br/>without the file]
     PD --> VIS
     PD -- events --> OBJ
     PD -- reviews --> SEV
@@ -346,6 +347,7 @@ Kubernetes restarts each failed pod. The table shows what else happens.
 - Cameras: the cameras are on the home LAN. Block their internet access on the router, so that they cannot send video out. Do not open router ports. Use the WireGuard VPN for remote access.
 - Network policies: the `hsec` namespace accepts traffic from other namespaces only on a few listed ports. Inside the namespace, pods can reach each other, except for the Frigate port 5000. See [specs.md](specs.md#network-policies).
 - Frigate: the UI on port 8971 needs a login. Port 5000 has no login and gives admin access [5]. The Service `frigate-api` exposes it inside the cluster for the Flink job. A network policy allows only the Flink TaskManager pod to reach it.
+- Web UIs: Traefik serves the Frigate UI, the Flink UI, and the RustFS console as plain HTTP. Passwords cross the LAN in clear text. The Flink UI has no login. See [ADR-15](#adr-15-web-uis-through-traefik-over-plain-http).
 - Passwords: Terraform creates random passwords for all internal users. You give only the Discord webhook URL, the camera RTSP password, and the Grafana token.
 - Terraform state: the state holds all passwords in plain text. It lives in a Kubernetes Secret, not in git. `.gitignore` must exclude `*.tfvars` and `.terraform/`.
 - CI/CD: the repository is public, and so are its run logs. The deploy workflow runs only for `main`, never for pull requests, so fork code never gets its secrets [31]. Its secrets live in the GitHub environment `pers-infra`. The workflow prints only the summary line of each apply. See [ADR-14](#adr-14-continuous-deployment-from-github-actions-over-tailscale).
@@ -472,7 +474,7 @@ Kubernetes restarts each failed pod. The table shows what else happens.
   - Frigate keeps alert and detection video for 14 days. It is the only full store of video.
   - Message 1: when a review becomes an alert, Flink picks a person from the review, or else its first tracked object. It downloads the 720-pixel snapshot of that object at once [25].
   - Clip parts: when the alert review ends, Flink cuts it into 25-second windows. It downloads each window 20 seconds after the window ends, so every part is complete. Windows that ended earlier go out at once. Each part is one message.
-  - A part above 19 MiB goes to Discord as a link to the Frigate clip.
+  - A part above 19 MiB goes to Discord as a text without the file. The text has no link. See [ADR-15](#adr-15-web-uis-through-traefik-over-plain-http).
   - The topic `hsec.alerts` allows messages of up to 32 MiB (`max.message.bytes`) [21]. This is under the default request limit of 100 MiB [20], so no Redpanda cluster setting changes.
 - Alternatives:
   - The two custom rules (unknown face at night, loitering unknown). They filtered out household members, but you chose every alert review.
@@ -546,6 +548,32 @@ Kubernetes restarts each failed pod. The table shows what else happens.
   - Anyone with write access to `main` controls the cluster. Keep the repository with one writer, and let a fork pull request run workflows only after your approval.
   - After you change a `terraform.tfvars` file, you must save its environment secret again.
 
+### ADR-15: Web UIs through Traefik over plain HTTP
+
+- Context:
+  - You want to open Frigate, Flink, and the RustFS console by name, from the LAN and the tailnet.
+  - k3s runs Traefik as its default ingress controller.
+  - By default, Frigate serves its UI on port 8971 with a self-signed certificate. Traefik uses HTTPS to a backend port with the name `https` [32].
+  - The Spark driver UI lives only during a batch run of about 1 minute.
+- Decision:
+  - Each module creates an Ingress with the class `traefik`: `frigate.<domain>`, `flink.<domain>`, and `rustfs.<domain>`. The roots get the variable `domain`. You add the names in Tailscale DNS.
+  - The default of `domain` is `hsec.home.arpa`. RFC 8375 reserves `home.arpa` for home networks [33]. Many clients send `.local` names to multicast DNS, so the design does not use `.local`.
+  - The Ingresses use plain HTTP. Frigate turns its TLS off, and its port 8971 gets the name `http`.
+  - Traefik adds no login. Frigate and RustFS keep their own logins, and the Flink UI has none.
+  - The network policy `allow-traefik` lets only the Traefik pod reach the Flink and RustFS UI ports.
+  - Spark gets no Ingress.
+  - The Discord text has no Frigate link. The images and the clips are in Discord, and the job builds the stored URLs from the cluster-internal name of Frigate.
+- Alternatives:
+  - HTTPS with the default Traefik certificate. Then the browser shows a warning.
+  - A basic-auth login in Traefik for Flink. You chose no login on the LAN.
+  - A Spark History Server. It adds one pod for a page that you seldom need.
+  - Frigate keeps TLS, and Traefik skips the check of its certificate. Then the module needs a Traefik `ServersTransport` resource.
+- Consequences:
+  - The Frigate login, the RustFS login, and the Flink UI cross the LAN and the tailnet without encryption.
+  - Anyone on the LAN or the tailnet can upload and cancel Flink jobs. Never forward the ports 80 and 443 on the router.
+  - `http://192.168.1.17:8971` also serves plain HTTP now.
+  - The stored URLs in the `alerts` tables work only inside the cluster. Old rows keep the old LAN URLs.
+
 ## Open questions
 
 1. How many cameras are there, and what are their RTSP URLs, resolutions, and bitrates? A 25-second clip part must stay under 19 MiB, so each record stream can use up to about 6 Mbit/s.
@@ -616,3 +644,7 @@ Kubernetes restarts each failed pod. The table shows what else happens.
 [30] Tailscale, "Workload identity federation," Tailscale Docs. Accessed: Oct. 17, 2026. [Online]. Available: https://tailscale.com/kb/1581/workload-identity-federation
 
 [31] GitHub, "Security hardening for GitHub Actions," GitHub Docs. Accessed: Oct. 17, 2026. [Online]. Available: https://docs.github.com/en/actions/reference/security/secure-use
+
+[32] Traefik Labs, "Traefik & Kubernetes with Ingress," Traefik Documentation, v3.6. Accessed: Oct. 21, 2026. [Online]. Available: https://github.com/traefik/traefik/blob/v3.6/docs/content/reference/routing-configuration/kubernetes/ingress.md
+
+[33] P. Pfister and T. Lemon, "Special-Use Domain 'home.arpa.'," RFC 8375, 2018, doi: 10.17487/RFC8375. [Online]. Available: https://www.rfc-editor.org/rfc/rfc8375

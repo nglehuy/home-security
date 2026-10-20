@@ -131,7 +131,7 @@ resource "kubernetes_deployment_v1" "frigate" {
           }
 
           port {
-            name           = "https"
+            name           = "http"
             container_port = 8971
           }
 
@@ -267,8 +267,9 @@ resource "kubernetes_service_v1" "frigate" {
     type     = "LoadBalancer"
     selector = local.selector
 
+    # Traefik talks HTTPS to a port with the name https, so the name is http.
     port {
-      name        = "https"
+      name        = "http"
       port        = 8971
       target_port = 8971
     }
@@ -311,6 +312,40 @@ resource "kubernetes_service_v1" "api" {
       name        = "api"
       port        = 5000
       target_port = 5000
+    }
+  }
+}
+
+# Traefik routes the host to the UI port 8971, which has the login. Never route
+# port 5000, because it has no login.
+resource "kubernetes_ingress_v1" "frigate" {
+  metadata {
+    name      = local.name
+    namespace = var.namespace
+    labels    = local.labels
+  }
+
+  spec {
+    ingress_class_name = "traefik"
+
+    rule {
+      host = var.ingress_host
+
+      http {
+        path {
+          path      = "/"
+          path_type = "Prefix"
+
+          backend {
+            service {
+              name = kubernetes_service_v1.frigate.metadata[0].name
+              port {
+                number = 8971
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

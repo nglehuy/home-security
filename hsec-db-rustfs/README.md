@@ -85,18 +85,20 @@ The chart `rustfs` 1.0.1 defaults to a distributed cluster with 4 pods. This mod
 | `storageclass.logStorageSize` | `1Gi` | Log volume |
 | `secret.existingSecret` | `rustfs-root` | Keys from Terraform, not chart defaults |
 | `resources` | 512 MiB, CPU request 0.1 | Memory budget |
-| `ingress.enabled` | `false` | The S3 API and the console stay inside the cluster. |
+| `ingress` | Class `traefik`, host `ingress_host` to the port `console`, no TLS | Traefik serves the console. The S3 port 9000 stays inside the cluster. |
 
 ## Kubernetes objects
 
 | Object | Name | Purpose |
 | --- | --- | --- |
-| Helm release | `rustfs` | Deployment `rustfs`, Service `rustfs-svc` (ports 9000 for S3 and 9001 for the console), and the PVCs `rustfs-data` and `rustfs-logs` |
+| Helm release | `rustfs` | Deployment `rustfs`, Service `rustfs-svc` (ports 9000 for S3 and 9001 for the console), Ingress `rustfs`, and the PVCs `rustfs-data` and `rustfs-logs` |
 | Job | `rustfs-buckets-<hash>` | Creates `hsec-lake` and `hsec-flink` with `amazon/aws-cli`. A second run changes nothing. The name holds a hash of the script. |
 
 Terraform starts the bucket Job after Helm sees that the RustFS pod is ready. If the Job fails, it tries again, up to 5 times.
 
-Address inside the cluster: `http://rustfs-svc.hsec.svc.cluster.local:9000`. To open the console from the admin machine, run `kubectl -n hsec port-forward svc/rustfs-svc 9001:9001`, then open `http://localhost:9001`.
+Address inside the cluster: `http://rustfs-svc.hsec.svc.cluster.local:9000`.
+
+To open the console, open `http://rustfs.<domain>/rustfs/console/` from the LAN or the tailnet. The root path `/` gives an S3 error. Port 9001 serves the console, and also the admin API and the S3 API that the console calls on the same host. These APIs need the RustFS keys. See [Web UIs](../docs/specs.md#web-uis) in the specs.
 
 ## Files
 
@@ -114,7 +116,7 @@ hsec-db-rustfs/
 ## Deploy
 
 - Terraform root: `terraform/010-workload`.
-- Module inputs: `namespace`, `labels`, `hdd_storage_class`, and `root_secret_name`.
+- Module inputs: `namespace`, `labels`, `hdd_storage_class`, `root_secret_name`, and `ingress_host`.
 
 ## Test
 

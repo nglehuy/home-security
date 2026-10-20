@@ -7,6 +7,7 @@ variables {
   hdd_storage_class = "hdd"
   timezone          = "Asia/Singapore"
   env_secret_name   = "frigate-env"
+  ingress_host      = "frigate.home.lan"
   cameras = {
     front_door = {
       detect_url    = "rtsp://admin:{FRIGATE_RTSP_PASSWORD}@192.168.1.20:554/sub"
@@ -62,6 +63,11 @@ run "seed_configuration" {
   assert {
     condition     = yamldecode(kubernetes_config_map_v1.seed.data["config.yml"]).ffmpeg == { hwaccel_args = "preset-intel-qsv-h264" }
     error_message = "ffmpeg must decode with Intel Quick Sync, because VAAPI failed now and then on the UHD 620."
+  }
+
+  assert {
+    condition     = yamldecode(kubernetes_config_map_v1.seed.data["config.yml"]).tls == { enabled = false }
+    error_message = "Frigate must serve port 8971 as plain HTTP, so Traefik can route to it."
   }
 
   assert {
@@ -135,6 +141,30 @@ run "volumes_and_services" {
   assert {
     condition     = kubernetes_service_v1.api.spec[0].type == "ClusterIP" && kubernetes_service_v1.api.spec[0].port[0].port == 5000
     error_message = "frigate-api must expose port 5000 inside the cluster only."
+  }
+
+  assert {
+    condition     = [for p in kubernetes_service_v1.frigate.spec[0].port : p.name if p.port == 8971] == ["http"]
+    error_message = "The UI port must not have the name https, because Traefik then talks HTTPS to it."
+  }
+}
+
+run "ingress" {
+  command = plan
+
+  assert {
+    condition     = kubernetes_ingress_v1.frigate.spec[0].ingress_class_name == "traefik" && kubernetes_ingress_v1.frigate.spec[0].rule[0].host == "frigate.home.lan"
+    error_message = "Traefik must route the given host."
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.frigate.spec[0].rule[0].http[0].path[0].backend[0].service[0].name == "frigate" && kubernetes_ingress_v1.frigate.spec[0].rule[0].http[0].path[0].backend[0].service[0].port[0].number == 8971
+    error_message = "The Ingress must go to the UI port 8971, which has the login, and never to port 5000."
+  }
+
+  assert {
+    condition     = length(kubernetes_ingress_v1.frigate.spec[0].tls) == 0
+    error_message = "The Ingress must use plain HTTP."
   }
 }
 

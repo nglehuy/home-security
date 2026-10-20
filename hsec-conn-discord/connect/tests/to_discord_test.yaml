@@ -24,20 +24,20 @@ tests:
   - name: clip with a file sends the clip and its part number
     target_processors: '../alerts-to-discord.yaml#/pipeline/processors'
     input_batch:
-      - content: '{"alert_id":"r1:clip:2","kind":"clip","camera":"front_cam","review_start":1718987129.308396,"part":2,"part_count":3,"clip_url":"https://192.168.1.17:8971/api/front_cam/start/1/end/2/clip.mp4","clip_mp4":"AAAAIGZ0eXA="}'
+      - content: '{"alert_id":"r1:clip:2","kind":"clip","camera":"front_cam","review_start":1718987129.308396,"part":2,"part_count":3,"clip_url":"http://frigate.hsec.svc.cluster.local:8971/api/front_cam/start/1/end/2/clip.mp4","clip_mp4":"AAAAIGZ0eXA="}'
     output_batches:
       - - metadata_equals:
             media_case: clip
           bloblang: '@payload_json.parse_json().content == "Clip 2 of 3 for the alert on front_cam at 2024-06-22 00:25:29."'
 
-  - name: clip without a file sends the Frigate link
+  - name: clip without a file says that it is not attached, without a link
     target_processors: '../alerts-to-discord.yaml#/pipeline/processors'
     input_batch:
-      - content: '{"alert_id":"r1:clip:3","kind":"clip","camera":"front_cam","review_start":1718987129.308396,"part":3,"part_count":3,"clip_url":"https://192.168.1.17:8971/api/front_cam/start/1/end/2/clip.mp4","clip_mp4":null}'
+      - content: '{"alert_id":"r1:clip:3","kind":"clip","camera":"front_cam","review_start":1718987129.308396,"part":3,"part_count":3,"clip_url":"http://frigate.hsec.svc.cluster.local:8971/api/front_cam/start/1/end/2/clip.mp4","clip_mp4":null}'
     output_batches:
       - - metadata_equals:
             media_case: none
-          bloblang: '@payload_json.parse_json().content == "Clip 3 of 3 for the alert on front_cam at 2024-06-22 00:25:29 is not attached. Frigate link: https://192.168.1.17:8971/api/front_cam/start/1/end/2/clip.mp4"'
+          bloblang: '@payload_json.parse_json().content == "Clip 3 of 3 for the alert on front_cam at 2024-06-22 00:25:29 is not attached."'
 
   - name: start with an empty zone list does not fail
     target_processors: '../alerts-to-discord.yaml#/pipeline/processors'

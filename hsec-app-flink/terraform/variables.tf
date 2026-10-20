@@ -19,11 +19,6 @@ variable "timezone" {
   type        = string
 }
 
-variable "frigate_url" {
-  description = "Base URL of the Frigate UI for alert links, for example https://192.168.1.17:8971."
-  type        = string
-}
-
 variable "env_secret_name" {
   description = "Secret with POSTGRES_ICEBERG_PASSWORD, RUSTFS_ACCESS_KEY, and RUSTFS_SECRET_KEY."
   type        = string
@@ -31,5 +26,10 @@ variable "env_secret_name" {
 
 variable "rustfs_secret_name" {
   description = "Secret of RustFS with RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY, for the checkpoint file system."
+  type        = string
+}
+
+variable "ingress_host" {
+  description = "Host name of the Flink web UI on Traefik, for example flink.hsec.home.arpa."
   type        = string
 }

@@ -18,6 +18,7 @@ module "rustfs" {
   labels            = local.labels
   hdd_storage_class = var.hdd_storage_class
   root_secret_name  = kubernetes_secret_v1.this["rustfs-root"].metadata[0].name
+  ingress_host      = "rustfs.${var.domain}"
 }
 
 module "redpanda" {

@@ -44,11 +44,10 @@ resource "helm_release" "job" {
   wait      = false
 
   values = [yamlencode({
-    image      = var.image
-    timezone   = var.timezone
-    frigateUrl = var.frigate_url
-    envSecret  = var.env_secret_name
-    labels     = var.labels
+    image     = var.image
+    timezone  = var.timezone
+    envSecret = var.env_secret_name
+    labels    = var.labels
   })]
 
   set_sensitive = [
@@ -63,4 +62,39 @@ resource "helm_release" "job" {
   ]
 
   depends_on = [helm_release.operator]
+}
+
+# Traefik routes the host to the web UI. The operator creates the Service
+# hsec-stream-rest with the job. The UI has no login, so Traefik must stay
+# reachable only from the LAN and the tailnet.
+resource "kubernetes_ingress_v1" "ui" {
+  metadata {
+    name      = "hsec-stream-ui"
+    namespace = var.namespace
+    labels    = var.labels
+  }
+
+  spec {
+    ingress_class_name = "traefik"
+
+    rule {
+      host = var.ingress_host
+
+      http {
+        path {
+          path      = "/"
+          path_type = "Prefix"
+
+          backend {
+            service {
+              name = "hsec-stream-rest"
+              port {
+                number = 8081
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }

@@ -71,12 +71,13 @@ variable "night_end" {
   default     = "06:00"
 }
 
-variable "frigate_url" {
-  description = "Base URL of the Frigate UI for alert links, for example https://192.168.1.17:8971."
+variable "domain" {
+  description = "Local DNS domain of the web UIs. hsec.home.arpa uses the special-use name for home networks (RFC 8375). Frigate gets frigate.<domain>, and Flink gets flink.<domain>."
   type        = string
+  default     = "hsec.home.arpa"
 
   validation {
-    condition     = can(regex("^https?://", var.frigate_url))
-    error_message = "frigate_url must start with http:// or https://."
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", var.domain))
+    error_message = "domain must be a DNS name in lowercase, without a scheme, a port, or a path."
   }
 }

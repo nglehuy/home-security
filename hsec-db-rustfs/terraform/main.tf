@@ -57,9 +57,18 @@ resource "helm_release" "rustfs" {
         memory = "512Mi"
       }
     }
-    # The S3 API and the console stay inside the cluster.
+    # Traefik routes the host to port 9001, which serves the console at
+    # /rustfs/console/ and its API. The S3 port 9000 stays inside the cluster.
     ingress = {
-      enabled = false
+      enabled   = true
+      className = "traefik"
+      hosts = [{
+        host  = var.ingress_host
+        paths = [{ path = "/", pathType = "Prefix", servicePort = "console" }]
+      }]
+      tls = {
+        enabled = false
+      }
     }
     commonLabels = var.labels
   })]

@@ -18,7 +18,6 @@ variables {
   image_registry    = "registry.lan:5000/"
   flink_image_tag   = "1.2.3"
   spark_image_tag   = "4.5.6"
-  frigate_url       = "https://192.168.1.17:8971"
   cameras = {
     front_door = {
       detect_url    = "rtsp://admin:{FRIGATE_RTSP_PASSWORD}@192.168.1.20:554/stream2"
@@ -38,12 +37,21 @@ run "plans_all_apps" {
   }
 }
 
-run "rejects_a_frigate_url_without_scheme" {
+run "rejects_a_domain_with_a_scheme" {
   command = plan
 
   variables {
-    frigate_url = "192.168.1.17:8971"
+    domain = "http://home.lan"
   }
 
-  expect_failures = [var.frigate_url]
+  expect_failures = [var.domain]
+}
+
+run "domain_default" {
+  command = plan
+
+  assert {
+    condition     = var.domain == "hsec.home.arpa"
+    error_message = "The default domain must be hsec.home.arpa, the special-use name for home networks (RFC 8375)."
+  }
 }

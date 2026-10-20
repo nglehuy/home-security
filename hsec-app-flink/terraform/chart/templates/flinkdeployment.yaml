@@ -62,7 +62,7 @@ spec:
       - --timezone
       - {{ .Values.timezone | quote }}
       - --frigate-url
-      - {{ required "frigateUrl is required" .Values.frigateUrl | quote }}
+      - http://frigate.{{ $ns }}.svc.cluster.local:8971
       - --frigate-api
       - http://frigate-api.{{ $ns }}.svc.cluster.local:5000
       - --kafka-bootstrap

@@ -134,7 +134,9 @@ On a fresh cluster, do these steps in order. Run each command from the repositor
 
 Each root keeps its state in a Kubernetes Secret in `kube-system`. The state of `010-workload` holds all passwords in plain text. Do not commit a `terraform.tfvars`, because it holds secret values.
 
-On the first start, Frigate prints its admin password in its log. Open the Frigate UI at `https://<node address>:8971`.
+On the first start, Frigate prints its admin password in its log. Open the Frigate UI at `http://frigate.<domain>` or `http://<node address>:8971`.
+
+Traefik serves three web UIs over plain HTTP: `http://frigate.<domain>`, `http://flink.<domain>`, and `http://rustfs.<domain>/rustfs/console/`. `domain` is a variable of both roots, and its default is `hsec.home.arpa`. You add the DNS records in Tailscale. The Flink UI has no login, so do not forward the ports 80 and 443 on the router. See [Web UIs](docs/specs.md#web-uis).
 
 ## Continuous deployment
 

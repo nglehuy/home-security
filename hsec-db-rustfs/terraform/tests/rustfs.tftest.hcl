@@ -6,6 +6,7 @@ variables {
   labels            = { "app.kubernetes.io/part-of" = "hsec" }
   hdd_storage_class = "hdd"
   root_secret_name  = "rustfs-root"
+  ingress_host      = "rustfs.home.lan"
 }
 
 run "chart" {
@@ -32,8 +33,18 @@ run "chart" {
   }
 
   assert {
-    condition     = yamldecode(helm_release.rustfs.values[0]).secret.existingSecret == "rustfs-root" && yamldecode(helm_release.rustfs.values[0]).ingress.enabled == false
-    error_message = "RustFS must use the given Secret and no Ingress."
+    condition     = yamldecode(helm_release.rustfs.values[0]).secret.existingSecret == "rustfs-root"
+    error_message = "RustFS must use the given Secret."
+  }
+
+  assert {
+    condition = yamldecode(helm_release.rustfs.values[0]).ingress == {
+      enabled   = true
+      className = "traefik"
+      hosts     = [{ host = "rustfs.home.lan", paths = [{ path = "/", pathType = "Prefix", servicePort = "console" }] }]
+      tls       = { enabled = false }
+    }
+    error_message = "Traefik must route only the console port of RustFS, over plain HTTP."
   }
 }
 

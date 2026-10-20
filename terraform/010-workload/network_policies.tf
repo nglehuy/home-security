@@ -83,6 +83,47 @@ resource "kubernetes_network_policy_v1" "frigate" {
   }
 }
 
+# Traefik in kube-system routes the Flink UI and the RustFS console. The
+# Frigate policy already opens port 8971 to all.
+resource "kubernetes_network_policy_v1" "traefik" {
+  metadata {
+    name      = "allow-traefik"
+    namespace = kubernetes_namespace_v1.hsec.metadata[0].name
+    labels    = local.labels
+  }
+
+  spec {
+    pod_selector {
+      match_expressions {
+        key      = "app.kubernetes.io/name"
+        operator = "In"
+        values   = ["hsec-stream", "rustfs"]
+      }
+    }
+
+    policy_types = ["Ingress"]
+
+    ingress {
+      ports {
+        port     = "8081"
+        protocol = "TCP"
+      }
+      ports {
+        port     = "9001"
+        protocol = "TCP"
+      }
+      from {
+        namespace_selector {
+          match_labels = { "kubernetes.io/metadata.name" = "kube-system" }
+        }
+        pod_selector {
+          match_labels = { "app.kubernetes.io/name" = "traefik" }
+        }
+      }
+    }
+  }
+}
+
 resource "kubernetes_network_policy_v1" "clickhouse_grafana" {
   count = var.grafana_namespace == null ? 0 : 1
 

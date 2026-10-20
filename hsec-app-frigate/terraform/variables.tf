@@ -29,6 +29,11 @@ variable "env_secret_name" {
   type        = string
 }
 
+variable "ingress_host" {
+  description = "Host name of the Frigate UI on Traefik, for example frigate.hsec.home.arpa."
+  type        = string
+}
+
 variable "cameras" {
   description = "Cameras by name. The URLs can contain {FRIGATE_RTSP_PASSWORD}."
   type = map(object({

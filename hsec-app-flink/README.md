@@ -123,7 +123,7 @@ flowchart TB
 
 The JobManager pod gets 768 MiB, and the TaskManager pod 1536 MiB. Flink splits the TaskManager memory into the JVM heap, network buffers, managed memory, and JVM overhead. Only RocksDB uses managed memory, so the job sets its share to 5 % and leaves more heap for the state.
 
-To open the Flink web UI, run `kubectl -n hsec port-forward svc/hsec-stream-rest 8081`, then open `http://localhost:8081`.
+To open the Flink web UI, open `http://flink.<domain>` from the LAN or the tailnet. Traefik routes it to the Service `hsec-stream-rest`. The UI has no login. See [Web UIs](../docs/specs.md#web-uis) in the specs.
 
 ## How it works
 
@@ -165,7 +165,7 @@ Clip parts (`kind: clip`):
 1. When the alert review ends, the job cuts the review time into windows of 25 seconds. The last window can be shorter, and a review always has at least one window.
 2. Frigate needs up to about 17 seconds to finish and store a recording segment. So a window is ready 20 seconds after it ends.
 3. A window that is already ready goes to the media step at once. The others wait for a processing-time timer, which is part of each checkpoint.
-4. The media step downloads the clip of the exact window. It waits at most 30 seconds and accepts at most 19 MiB. A bigger part goes out with only a Frigate link.
+4. The media step downloads the clip of the exact window. It waits at most 30 seconds and accepts at most 19 MiB. A bigger part goes out without the file.
 
 The media step keeps the order of the requests. So message 1 of a review always leaves before its clip parts. If a download fails, the message still goes out without the file.
 
@@ -189,7 +189,7 @@ The FlinkDeployment passes these program arguments:
 | Argument | Value |
 | --- | --- |
 | `--timezone` | The Terraform variable `timezone`, for the alert time |
-| `--frigate-url` | The Terraform variable `frigate_url`, for the links in alerts |
+| `--frigate-url` | `http://frigate.<namespace>.svc.cluster.local:8971`, for `snapshot_url` and `clip_url`. Only pods in the cluster can open these URLs. |
 | `--frigate-api` | `http://frigate-api.<namespace>.svc.cluster.local:5000` |
 | `--kafka-bootstrap` | `redpanda-0.redpanda.<namespace>.svc.cluster.local:9093` |
 | `--catalog-uri` | `jdbc:postgresql://postgres.<namespace>.svc.cluster.local:5432/iceberg_catalog` |
@@ -204,6 +204,7 @@ The Secret `flink-env` gives `POSTGRES_ICEBERG_PASSWORD`, `RUSTFS_ACCESS_KEY`, a
 | --- | --- | --- |
 | Helm release | `flink-kubernetes-operator` | The operator, 512 MiB, CPU request 0.1. It watches only the app namespace and has no webhook. |
 | Helm release | `hsec-stream` | The local chart `terraform/chart/` with the FlinkDeployment `hsec-stream` |
+| Ingress | `hsec-stream-ui` | Class `traefik`, host `ingress_host` to the Service `hsec-stream-rest` on port 8081, plain HTTP. The operator creates that Service with the job. |
 | Pod | `hsec-stream-...` | The JobManager, 768 MiB, CPU 0.25 |
 | Pod | `hsec-stream-taskmanager-1-1` | The TaskManager, 1536 MiB, CPU 0.5. It has the labels `app: hsec-stream` and `component: taskmanager`, which the Frigate network policy allows. |
 
@@ -270,7 +271,7 @@ The Docker build skips the tests, because `MigrationSchemaTest` reads `../hsec-d
 ## Deploy
 
 - Terraform root: `terraform/020-app`. Apply `terraform/010-workload` first, and run the Iceberg migrations. See the [hsec-db-iceberg README](../hsec-db-iceberg/README.md#migrate).
-- Module inputs: `namespace`, `labels`, `image`, `timezone`, `frigate_url`, `env_secret_name`, and `rustfs_secret_name`.
+- Module inputs: `namespace`, `labels`, `image`, `timezone`, `env_secret_name`, `rustfs_secret_name`, and `ingress_host`.
 
 ## Test
 

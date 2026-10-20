@@ -24,6 +24,7 @@ module "frigate" {
   timezone          = var.timezone
   cameras           = var.cameras
   env_secret_name   = "frigate-env"
+  ingress_host      = "frigate.${var.domain}"
 }
 
 module "conn_mqtt" {
@@ -50,9 +51,9 @@ module "flink" {
   labels             = local.labels
   image              = local.flink_image
   timezone           = var.timezone
-  frigate_url        = var.frigate_url
   env_secret_name    = "flink-env"
   rustfs_secret_name = "rustfs-root"
+  ingress_host       = "flink.${var.domain}"
 }
 
 module "spark" {

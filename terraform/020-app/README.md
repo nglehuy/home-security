@@ -40,7 +40,8 @@ The jobs do not create tables. If an Iceberg table is missing, the Flink job fai
 - Cluster: `kubeconfig_path`, `kube_context`, `namespace`.
 - Storage and time: `ssd_storage_class`, `hdd_storage_class`, `timezone`.
 - Images: `image_registry`, `flink_image_tag`, `spark_image_tag`.
-- Apps: `cameras`, `night_start`, `night_end`, `frigate_url`.
+- Apps: `cameras`, `night_start`, `night_end`.
+- Web UIs, optional: `domain`, default `hsec.home.arpa`. Frigate gets the host `frigate.<domain>`, and Flink gets `flink.<domain>`. Use the same value in `terraform/010-workload`. See [Web UIs](../../docs/specs.md#web-uis).
 
 ## State
 

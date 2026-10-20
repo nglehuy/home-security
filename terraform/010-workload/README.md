@@ -42,6 +42,7 @@ Do not commit `terraform.tfvars`, because it holds secret values. [Secrets](../.
 
 - Cluster: `kubeconfig_path`, `kube_context`, `namespace`.
 - Storage and time: `ssd_storage_class`, `hdd_storage_class`, `timezone`.
+- Web UIs, optional: `domain`, default `hsec.home.arpa`. RustFS gets the host `rustfs.<domain>`. Use the same value in `terraform/020-app`. See [Web UIs](../../docs/specs.md#web-uis).
 - Grafana, optional: `grafana_namespace`. If you set it, a network policy lets the Grafana pods reach ClickHouse on port 8123.
 - Sensitive: `discord_webhook_url`, `frigate_rtsp_password`.
 
@@ -57,7 +58,7 @@ Build and push the two custom images. Then apply `terraform/020-app`. See its [R
 
 ## Test
 
-Run `terraform validate` and `terraform test`. The tests cover the module calls, the Secrets, the network policies, and the migration Jobs.
+Run `terraform validate` and `terraform test`. The tests cover the module calls, the Secrets, the network policies, the migration Jobs, and the check of `domain`.
 
 ## Details
 

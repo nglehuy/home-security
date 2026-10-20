@@ -24,6 +24,7 @@
 - [ClickHouse](#clickhouse)
 - [Discord notifier](#discord-notifier)
 - [Grafana setup](#grafana-setup)
+- [Web UIs](#web-uis)
 - [Network policies](#network-policies)
 - [Testing](#testing)
 - [Repository layout](#repository-layout)
@@ -49,7 +50,7 @@ In-cluster endpoints:
 | RustFS S3 API | `http://rustfs-svc.hsec.svc.cluster.local:9000` |
 | Postgres | `postgres.hsec.svc.cluster.local:5432` |
 | ClickHouse HTTP | `http://clickhouse.hsec.svc.cluster.local:8123` |
-| Frigate | `https://192.168.1.17:8971` (ServiceLB) |
+| Frigate | `http://192.168.1.17:8971` (ServiceLB). See [Web UIs](#web-uis) for the Traefik host names. |
 
 Other names:
 
@@ -125,15 +126,15 @@ Module inputs. Each module also gets `namespace` and the common labels.
 
 | Module | Root | Main inputs |
 | --- | --- | --- |
-| `hsec-db-rustfs` | `010-workload` | HDD class, Secret `rustfs-root` |
+| `hsec-db-rustfs` | `010-workload` | HDD class, Secret `rustfs-root`, `ingress_host` |
 | `hsec-q-redpanda` | `010-workload` | SSD class |
 | `hsec-q-mqtt` | `010-workload` | SSD class, Secret `mosquitto-env` |
 | `hsec-db-clickhouse` | `010-workload` | HDD class, time zone, ClickHouse passwords, Grafana namespace |
 | `hsec-db-iceberg` | `010-workload` | SSD class, Secret `postgres-iceberg` |
-| `hsec-app-frigate` | `020-app` | SSD and HDD classes, time zone, cameras, Secret `frigate-env` |
+| `hsec-app-frigate` | `020-app` | SSD and HDD classes, time zone, cameras, Secret `frigate-env`, `ingress_host` |
 | `hsec-conn-mqtt` | `020-app` | Secret `bridge-env` |
 | `hsec-conn-discord` | `020-app` | Time zone, Secret `notifier-env` |
-| `hsec-app-flink` | `020-app` | Image, time zone, `frigate_url`, Secrets `flink-env` and `rustfs-root` |
+| `hsec-app-flink` | `020-app` | Image, time zone, Secrets `flink-env` and `rustfs-root`, `ingress_host` |
 | `hsec-app-spark` | `020-app` | Image, time zone, night window, Secret `spark-env` |
 
 ### Providers and versions
@@ -202,6 +203,7 @@ Add these lines to `.gitignore`:
 | `timezone` | string | `Asia/Singapore` | `010-workload`, `020-app` | Local time for Frigate, Flink, Spark, ClickHouse, and the notifier |
 | `ssd_storage_class` | string | none | `010-workload`, `020-app` | Class for SSD volumes |
 | `hdd_storage_class` | string | none | `010-workload`, `020-app` | Class for the Frigate media, RustFS, and ClickHouse volumes |
+| `domain` | string | `hsec.home.arpa` | `010-workload`, `020-app` | Local DNS domain of the web UIs. See [Web UIs](#web-uis). |
 | `grafana_url` | string | none | `010-workload` | Grafana API address |
 | `grafana_namespace` | string | none | `010-workload` | Namespace of the Grafana pods, for the network policy |
 | `discord_webhook_url` | string, sensitive | none | `010-workload` | Alert channel |
@@ -212,7 +214,6 @@ Add these lines to `.gitignore`:
 | `spark_image_tag` | string | none | `020-app` | Tag of the Spark job image |
 | `cameras` | map of objects | none | `020-app` | Per camera: `detect_url`, `record_url`, `detect_width`, `detect_height` |
 | `night_start`, `night_end` | string | `23:00`, `06:00` | `020-app` | Night window for the day and night stats |
-| `frigate_url` | string | none | `020-app` | Base URL in alert links, for example `https://192.168.1.17:8971` |
 
 Camera URLs contain the text `{FRIGATE_RTSP_PASSWORD}`. Frigate replaces it with the environment variable of the same name, so the password stays out of the configuration file.
 
@@ -428,6 +429,9 @@ mqtt:
   password: "{FRIGATE_MQTT_PASSWORD}"
   qos: 1
 
+tls:
+  enabled: false
+
 detectors:
   ov:
     type: openvino
@@ -481,6 +485,7 @@ Rules:
 - Copy the `model` block for the default OpenVINO model from the Frigate docs [5]. The default model is SSDLite MobileNet v2.
 - `record`: Frigate keeps only the video of alerts and detections, for 14 days [27]. It builds the alert clips from this video [28]. See [Alert media](#alert-media).
 - `qos: 1`: the default is 0, which sends each message once with no retry [6].
+- `tls.enabled: false`: by default, Frigate serves port 8971 with a self-signed certificate [47]. Traefik routes the UI as plain HTTP, so Frigate turns TLS off. The UI still asks for its login. See [Web UIs](#web-uis).
 - `preset-intel-qsv-h264`: the Frigate docs list `preset-vaapi` and the Quick Sync presets for Intel Gen 8 to Gen 12 graphics [7]. UHD 620 is Gen 9.5. On this host, `preset-vaapi` failed about every 9 minutes with `Failed to sync surface`, so the configuration uses Quick Sync.
 - `model_size: small`: this face model runs on the CPU [8].
 - If OpenVINO fails on the UHD 620, change `device: GPU` to `device: CPU`. Then remove the GPU request from the pod.
@@ -633,7 +638,7 @@ Review items on one camera never overlap [31]. By default, every tracked object 
 For 14 days, the Frigate clip API returns the video for a reference [28]:
 
 ```text
-GET https://192.168.1.17:8971/api/<video_camera>/start/<video_from>/end/<video_to>/clip.mp4
+GET http://192.168.1.17:8971/api/<video_camera>/start/<video_from>/end/<video_to>/clip.mp4
 ```
 
 This address needs a Frigate login. A long-lived object, such as a parked car, can have times with no review item. Those times have no video.
@@ -799,7 +804,7 @@ spec:
 | `flink-env` Secret | Holds the Postgres password and the RustFS keys for the Iceberg catalog. The job reads them from environment variables. |
 | TaskManager memory `1536m` | A clip part can hold 19 MiB. The download, the base64 text, the Kafka record, and the Parquet writer each hold a copy. With at most 2 clip downloads at a time, this needs about 200 MiB. |
 
-Terraform renders `job.properties` from the variables `timezone` and `frigate_url`. A ConfigMap mounts it in the pod.
+Terraform gives the chart the variable `timezone`. The chart builds `--frigate-url` and the other cluster addresses from the namespace. `--frigate-url` is `http://frigate.<namespace>.svc.cluster.local:8971`. See [Alert media](#alert-media).
 
 ### Job logic
 
@@ -884,7 +889,7 @@ Message with `kind: start` on `hsec.alerts`:
   "event_id": "1718987128.947436-g92ztx",
   "fired_ts": "2026-10-04T21:05:31.120+08:00",
   "video": { "camera": "front_cam", "from": 1718987129.308396, "to": 1718987129.308396 },
-  "snapshot_url": "https://192.168.1.17:8971/api/events/1718987128.947436-g92ztx/snapshot.jpg",
+  "snapshot_url": "http://frigate.hsec.svc.cluster.local:8971/api/events/1718987128.947436-g92ztx/snapshot.jpg",
   "image_jpeg": "<base64 JPEG, or null>"
 }
 ```
@@ -901,7 +906,7 @@ Message with `kind: clip` on `hsec.alerts`:
   "part": 2,
   "part_count": 3,
   "video": { "camera": "front_cam", "from": 1718987154.308396, "to": 1718987179.308396 },
-  "clip_url": "https://192.168.1.17:8971/api/front_cam/start/1718987154.308396/end/1718987179.308396/clip.mp4",
+  "clip_url": "http://frigate.hsec.svc.cluster.local:8971/api/front_cam/start/1718987154.308396/end/1718987179.308396/clip.mp4",
   "clip_mp4": "<base64 MP4, or null>"
 }
 ```
@@ -913,13 +918,13 @@ An asynchronous step downloads the files for each alert request [32].
 | Request | Frigate call | Timeout | Size limit | On failure |
 | --- | --- | --- | --- | --- |
 | Snapshot for message 1 | `GET ${FRIGATE_API}/api/events/<event_id>/snapshot.jpg?bounding_box=1&height=720&quality=70` | 5 seconds | 1 MiB | `image_jpeg` is null. Message 1 still goes out. |
-| Clip for one window | `GET ${FRIGATE_API}/api/<camera>/start/<window_start>/end/<window_end>/clip.mp4` | 30 seconds | 19 MiB | `clip_mp4` is null. The message still goes out with `clip_url`. |
+| Clip for one window | `GET ${FRIGATE_API}/api/<camera>/start/<window_start>/end/<window_end>/clip.mp4` | 30 seconds | 19 MiB | `clip_mp4` is null. The message still goes out without the file. |
 
 - Frigate 0.18 accepts the snapshot query values for tracked objects that are still in progress [33].
 - The clip API builds a clip only from finished recording segments [28]. Frigate needs up to about 17 seconds to finish and store a segment: up to 10 seconds to close the 10-second segment, up to 5 seconds until its next cache check, and the copy. So the step asks for a window only 20 seconds after the window ends. Then the clip is complete.
 - If the clip API is called too early, it does not fail. It returns a shorter clip from the segments that exist. This is why the step waits instead of retrying.
 - The step stores the files as base64 in `image_jpeg` and `clip_mp4`. Each message carries one file at most, so it stays under the Discord limit of 20 MiB [34].
-- `clip_url` points to the same clip on the Frigate UI port. It needs a Frigate login.
+- `snapshot_url` and `clip_url` point to the same files on the Frigate UI port, with the cluster-internal name of the Service `frigate`. Only pods in the cluster can open them, with a Frigate login. Discord does not show them.
 - At most 2 clip downloads and 10 snapshot downloads run at a time. The log and a metric show each failure.
 - The `video` field and the `video_*` headers hold the same reference. See [Video reference](#video-reference).
 - The FlinkDeployment gets `FRIGATE_API` as an environment variable, for example `http://frigate-api.hsec.svc.cluster.local:5000`.
@@ -1097,8 +1102,9 @@ Folder: `hsec-db-rustfs`.
 | `storageclass.logStorageSize` | `1Gi` |
 | `secret.existingSecret` | `rustfs-root`, with the key names that the chart expects |
 | `resources` | memory 512 MiB, CPU request 0.1 |
+| `ingress` | Class `traefik`, host `rustfs.<domain>` to the port `console`, no TLS. See [Web UIs](#web-uis). |
 
-The Service is `rustfs-svc` on port 9000. The console on port 9001 stays inside the cluster.
+The Service is `rustfs-svc`, with the S3 API on port 9000 and the console on port 9001. Port 9001 serves the console at `/rustfs/console/`. The console calls the admin API and the S3 API on its own host and port. So the Ingress needs only port 9001, and port 9000 stays inside the cluster.
 
 The Job `rustfs-buckets` uses the image `amazon/aws-cli:2.34.62` and creates two buckets. A second run changes nothing.
 
@@ -1337,7 +1343,7 @@ pipeline:
         } else if this.clip_mp4 != null {
           "Clip %v of %v for the alert on %v at %v.".format(this.part, this.part_count, this.camera, $when)
         } else {
-          "Clip %v of %v for the alert on %v at %v is not attached. Frigate link: %v".format(this.part, this.part_count, this.camera, $when, this.clip_url)
+          "Clip %v of %v for the alert on %v at %v is not attached.".format(this.part, this.part_count, this.camera, $when)
         }
         meta payload_json = { "username": "Home security", "content": $text }.format_json().string()
         meta media_case = if this.image_jpeg != null { "image" } else if this.clip_mp4 != null { "clip" } else { "none" }
@@ -1397,7 +1403,7 @@ Unit tests with `rpk connect test` target the `to_discord` processor:
 | `kind: start` with an image | `media_case` is `image`. The text starts with "Alert on" and holds the camera, the local time, the objects, and the zones. |
 | `kind: start` without an image | `media_case` is `none`. |
 | `kind: clip` with a clip | `media_case` is `clip`. The text says "Clip 2 of 3". |
-| `kind: clip` without a clip | `media_case` is `none`. The text holds `clip_url`. |
+| `kind: clip` without a clip | `media_case` is `none`. The text says that the clip is not attached, and holds no link. |
 | `kind: start` with an empty zone list | The text shows an empty zone list and does not fail. |
 
 ## Grafana setup
@@ -1436,6 +1442,24 @@ Terraform also creates the folder "Home security" and four dashboards from `hsec
 
 Each dashboard refers to the data source by the UID `hsec-clickhouse`.
 
+## Web UIs
+
+Traefik, the default ingress controller of k3s, serves three web UIs on port 80 of the node. Each module creates the Ingress of its app, with the class `traefik`.
+
+| Host | Service and port | Login | Module |
+| --- | --- | --- | --- |
+| `frigate.<domain>` | `frigate`, 8971 | Frigate login | `hsec-app-frigate` |
+| `flink.<domain>` | `hsec-stream-rest`, 8081 | None | `hsec-app-flink` |
+| `rustfs.<domain>` | `rustfs-svc`, 9001 | RustFS login. Open `/rustfs/console/`. | `hsec-db-rustfs` |
+
+- `domain` is a Terraform variable of both roots. Its default is `hsec.home.arpa`, because RFC 8375 reserves `home.arpa` for home networks [49]. Do not use `.local`. Many clients send `.local` names to multicast DNS on the LAN, not to the DNS server [50].
+- You add the DNS records in Tailscale. They point to the node, by its tailnet address or its LAN address.
+- The Ingresses have no TLS section, so the clients use `http://`. The Ingresses name no entry point, so Traefik also routes them on port 443. The k3s Traefik turns TLS on for that entry point, with its default self-signed certificate.
+- Traefik uses HTTPS to a backend port with the name `https` or the number 443 [48]. So the Frigate port 8971 has the name `http`, and Frigate turns its TLS off. See [Starting configuration](#starting-configuration).
+- The Flink UI has no login, and it can upload and cancel jobs. So Traefik must stay reachable only from the LAN and the tailnet. Do not forward the ports 80 and 443 on the router.
+- No Ingress goes to Frigate port 5000, which has no login.
+- The Spark driver UI lives only during a batch run of about 1 minute, so it has no Ingress.
+
 ## Network policies
 
 Folder: `terraform/010-workload`.
@@ -1449,6 +1473,7 @@ Frigate has its own policy, because its port 5000 has no login. Network policies
 | Frigate | 8971, 8554, 8555 | Any source | LAN and WireGuard clients, through ServiceLB |
 | Frigate | 5000 | Pods with `app: hsec-stream` and `component: taskmanager` | The Flink job downloads alert images |
 | ClickHouse | 8123 | Namespace `var.grafana_namespace` | Grafana queries |
+| Flink JobManager and RustFS | 8081, 9001 | Pods with `app.kubernetes.io/name: traefik` in `kube-system` | The Flink UI and the RustFS console, through Traefik. See [Web UIs](#web-uis). |
 
 The Flink and Spark operators run in `hsec`, so they reach their jobs through the same-namespace rule. The Kubernetes API server calls the Spark operator webhook. On this single-node cluster, that call comes from the node, and Kubernetes always allows traffic from the node where a pod runs [36].
 
@@ -1465,8 +1490,8 @@ The k3s embedded network policy controller enforces these policies [25]. Egress 
 | ClickHouse migrations | `clickhouse local` | After `CREATE DATABASE hsec`, each `.up.sql` file runs in order without an error. Then each `.down.sql` file runs in reverse order without an error. |
 | Iceberg migrations | `spark-sql` 4.0.4 in local mode with the same `--packages`, and a Hadoop catalog named `lake` on a temporary folder | Each `.up.sql` file runs in order without an error. A second run of `0001_init.up.sql` changes nothing. |
 | Iceberg migration script | `shellcheck` | `hsec-db-iceberg/migrate.sh` has no warnings. |
-| Terraform modules | `terraform fmt -check`, `terraform validate`, and `terraform test` with mock providers, in each `hsec-*/terraform` folder | The rendered Frigate configuration, the Secret names, the labels, and the `checksum/pipeline` annotations of the bridge and the notifier |
-| Terraform roots | `terraform validate` and `terraform test` in `terraform/010-workload` and `terraform/020-app` | The module calls, the Secrets, and the network policies |
+| Terraform modules | `terraform fmt -check`, `terraform validate`, and `terraform test` with mock providers, in each `hsec-*/terraform` folder | The rendered Frigate configuration, the Secret names, the labels, the Ingresses, and the `checksum/pipeline` annotations of the bridge and the notifier |
+| Terraform roots | `terraform validate` and `terraform test` in `terraform/010-workload` and `terraform/020-app` | The module calls, the Secrets, the network policies, and the check of `domain` |
 | Local job charts | `helm lint` and `helm template` in `hsec-app-flink/terraform/chart` and `hsec-app-spark/terraform/chart` | The rendered FlinkDeployment and ScheduledSparkApplication |
 | Whole system | `tests/smoke-test.sh` | See below |
 
@@ -1497,6 +1522,7 @@ The smoke test does these steps:
 7. Stop the bridge, publish 100 messages, and start the bridge again. Make sure that all 100 messages arrive in Redpanda.
 8. Walk in front of a camera for about 60 seconds. Make sure that Discord shows the image within a few seconds. Then, within about 20 seconds after the review ends, make sure that 3 clip parts arrive, and that each one plays.
 9. From a pod that is not a Flink TaskManager, open port 5000 of `frigate-api`. Make sure that the connection fails.
+10. From a LAN or tailnet client, open `http://frigate.<domain>`, `http://flink.<domain>`, and `http://rustfs.<domain>/rustfs/console/`. Make sure that each page loads.
 
 ## Repository layout
 
@@ -1656,3 +1682,11 @@ Each app folder and each root in `terraform/` has a `README.md`. Each `<app>/ter
 [45] Apache Flink, "Configuration," Flink Kubernetes Operator Documentation. Accessed: Oct. 19, 2026. [Online]. Available: https://nightlies.apache.org/flink/flink-kubernetes-operator-docs-release-1.13/docs/operations/configuration/
 
 [46] Frigate contributors, "`frigate/config/camera/detect.py`," GitHub, release 0.18.0. Accessed: Oct. 20, 2026. [Online]. Available: https://github.com/blakeblackshear/frigate/blob/v0.18.0/frigate/config/camera/detect.py
+
+[47] Frigate contributors, "TLS," Frigate documentation source, release 0.18.0. Accessed: Oct. 21, 2026. [Online]. Available: https://github.com/blakeblackshear/frigate/blob/v0.18.0/docs/docs/configuration/tls.md
+
+[48] Traefik Labs, "Traefik & Kubernetes with Ingress," Traefik Documentation, v3.6. Accessed: Oct. 21, 2026. [Online]. Available: https://github.com/traefik/traefik/blob/v3.6/docs/content/reference/routing-configuration/kubernetes/ingress.md
+
+[49] P. Pfister and T. Lemon, "Special-Use Domain 'home.arpa.'," RFC 8375, 2018, doi: 10.17487/RFC8375. [Online]. Available: https://www.rfc-editor.org/rfc/rfc8375
+
+[50] S. Cheshire and M. Krochmal, "Multicast DNS," RFC 6762, Feb. 2013, doi: 10.17487/RFC6762. [Online]. Available: https://www.rfc-editor.org/rfc/rfc6762

@@ -15,6 +15,7 @@ flowchart TB
   end
   PUB -- "frigate/# with QoS 1" --> MQ[Mosquitto: hsec-q-mqtt]
   LAN[LAN and WireGuard clients] -- "Service frigate: port 8971, login" --> POD
+  TS[LAN and tailnet clients] -- "Ingress host on port 80" --> TR[Traefik] -- "port 8971, login" --> POD
   FL[Flink TaskManager: hsec-app-flink] -- "Service frigate-api: port 5000, no login" --> POD
 ```
 
@@ -22,7 +23,7 @@ flowchart TB
 2. Frigate decodes the detect stream with Intel Quick Sync (hardware video decode) on the Intel UHD 620. OpenVINO finds objects on the same GPU. Face recognition runs on the CPU.
 3. Frigate records only the video around alerts and detections, and keeps it for 14 days. Snapshots stay for 30 days.
 4. Frigate publishes events, reviews, object updates, and status messages under the MQTT prefix `frigate/`.
-5. LAN clients use the web UI on port 8971, which needs a login. Port 5000 has no login. A network policy lets only the Flink TaskManager reach it, for alert snapshots and clips.
+5. LAN clients use the web UI on port 8971, which needs a login. They open `http://frigate.<domain>` through Traefik, or `http://192.168.1.17:8971`. Port 5000 has no login. A network policy lets only the Flink TaskManager reach it, for alert snapshots and clips.
 
 ## Configuration
 
@@ -35,6 +36,7 @@ flowchart TB
 | Section | Value | Reason |
 | --- | --- | --- |
 | `mqtt` | `mosquitto.<namespace>.svc.cluster.local:1883`, QoS 1 | Mosquitto sends each message again until the bridge has it. |
+| `tls` | `enabled: false` | Port 8971 serves plain HTTP, so Traefik can route to it. The login stays. |
 | `detectors` | OpenVINO on `GPU` | Object detection on the UHD 620 |
 | `model` | SSDLite MobileNet v2, 300 x 300 pixels | The OpenVINO model in the Frigate image |
 | `ffmpeg` | `preset-intel-qsv-h264` | Hardware decode of H.264 on Intel Gen 8 to Gen 12 graphics. `preset-vaapi` failed about every 9 minutes on the UHD 620 with `Failed to sync surface`. |
@@ -57,6 +59,9 @@ If OpenVINO fails on the UHD 620, change `device: GPU` to `device: CPU` in the t
 | Deployment | `frigate` | One pod with the `Recreate` strategy, 3 GiB of memory, 1 CPU, and one Intel GPU |
 | Service | `frigate` | Type `LoadBalancer` (k3s ServiceLB) on ports 8971, 8554, and 8555 |
 | Service | `frigate-api` | Type `ClusterIP` on port 5000, for Flink |
+| Ingress | `frigate` | Class `traefik`, host `ingress_host` to the Service `frigate` on port 8971, plain HTTP |
+
+The port 8971 of the Service `frigate` has the name `http`. Traefik uses HTTPS to a port with the name `https`. See [Web UIs](../docs/specs.md#web-uis) in the specs.
 
 The pod also mounts two folders in memory: `/dev/shm` (512 MiB) and `/tmp/cache` (1 GiB). They count toward the 3 GiB memory limit. The startup probe gives the first start up to 10 minutes, because Frigate downloads its models then. On the first start, Frigate prints the admin password in its log.
 
@@ -78,12 +83,12 @@ hsec-app-frigate/
 
 - Terraform root: `terraform/020-app`. Apply `terraform/010-workload` first, because it creates the Secret `frigate-env` and Mosquitto.
 - GPU: the cluster must offer the resource `gpu.intel.com/i915`. The k3s setup of the cluster installs the Intel GPU device plugin that offers it.
-- Module inputs: `namespace`, `labels`, `ssd_storage_class`, `hdd_storage_class`, `timezone`, `env_secret_name`, and `cameras`.
+- Module inputs: `namespace`, `labels`, `ssd_storage_class`, `hdd_storage_class`, `timezone`, `env_secret_name`, `ingress_host`, and `cameras`.
 - A camera name can use only letters, digits, `_`, and `-`. The detect width and height must be greater than 0.
 
 ## Test
 
-In `terraform/`, run `terraform init -backend=false` and then `terraform test`. The tests cover the rendered configuration, the pod, the volumes, the Services, and the camera checks.
+In `terraform/`, run `terraform init -backend=false` and then `terraform test`. The tests cover the rendered configuration, the pod, the volumes, the Services, the Ingress, and the camera checks.
 
 ## Details
 
