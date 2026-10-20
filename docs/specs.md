@@ -468,6 +468,7 @@ cameras:
         - path: ${cam.detect_url}
           roles: [detect]
     detect:
+      enabled: true
       width: ${cam.detect_width}
       height: ${cam.detect_height}
       fps: 5
@@ -476,6 +477,7 @@ cameras:
 
 Rules:
 
+- `detect.enabled: true` on each camera: in Frigate 0.18, the default is `false` [46]. Without it, Frigate decodes the detect stream but finds no objects.
 - Copy the `model` block for the default OpenVINO model from the Frigate docs [5]. The default model is SSDLite MobileNet v2.
 - `record`: Frigate keeps only the video of alerts and detections, for 14 days [27]. It builds the alert clips from this video [28]. See [Alert media](#alert-media).
 - `qos: 1`: the default is 0, which sends each message once with no retry [6].
@@ -1652,3 +1654,5 @@ Each app folder and each root in `terraform/` has a `README.md`. Each `<app>/ter
 [44] Apache Iceberg, "`JdbcCatalog.java`," GitHub, release 1.12.0. Accessed: Oct. 19, 2026. [Online]. Available: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/core/src/main/java/org/apache/iceberg/jdbc/JdbcCatalog.java
 
 [45] Apache Flink, "Configuration," Flink Kubernetes Operator Documentation. Accessed: Oct. 19, 2026. [Online]. Available: https://nightlies.apache.org/flink/flink-kubernetes-operator-docs-release-1.13/docs/operations/configuration/
+
+[46] Frigate contributors, "`frigate/config/camera/detect.py`," GitHub, release 0.18.0. Accessed: Oct. 20, 2026. [Online]. Available: https://github.com/blakeblackshear/frigate/blob/v0.18.0/frigate/config/camera/detect.py

@@ -41,7 +41,7 @@ flowchart TB
 | `face_recognition` | `small` model | Runs on the CPU |
 | `record` | Alerts and detections 14 days, other video 0 days | Only video with a detection stays. |
 | `snapshots` | 30 days | The retention limit of the system |
-| `cameras` | One entry per camera, detection at 5 fps | From the Terraform variable `cameras` |
+| `cameras` | One entry per camera, detection on at 5 fps | From the Terraform variable `cameras`. Frigate 0.18 turns detection off by default, so each camera sets `detect.enabled: true`. |
 
 The camera URLs contain the text `{FRIGATE_RTSP_PASSWORD}`, and the MQTT login uses `{FRIGATE_MQTT_USER}` and `{FRIGATE_MQTT_PASSWORD}`. Frigate replaces them with environment variables from the Secret `frigate-env`. So no password is in the configuration file.
 

@@ -56,6 +56,8 @@ cameras:
         - path: ${cam.detect_url}
           roles: [detect]
     detect:
+      # Frigate 0.18 turns detection off by default.
+      enabled: true
       width: ${cam.detect_width}
       height: ${cam.detect_height}
       fps: 5

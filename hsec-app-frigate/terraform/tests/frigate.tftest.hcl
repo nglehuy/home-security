@@ -32,8 +32,13 @@ run "seed_configuration" {
   }
 
   assert {
-    condition     = yamldecode(kubernetes_config_map_v1.seed.data["config.yml"]).cameras.garage.detect == { width = 1280, height = 720, fps = 5 }
+    condition     = yamldecode(kubernetes_config_map_v1.seed.data["config.yml"]).cameras.garage.detect == { enabled = true, width = 1280, height = 720, fps = 5 }
     error_message = "Each camera must use its own detect size and 5 fps."
+  }
+
+  assert {
+    condition     = alltrue([for c in values(yamldecode(kubernetes_config_map_v1.seed.data["config.yml"]).cameras) : c.detect.enabled == true])
+    error_message = "Every camera must turn detection on, because Frigate 0.18 turns it off by default."
   }
 
   assert {
