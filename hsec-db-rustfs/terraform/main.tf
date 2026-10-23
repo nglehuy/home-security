@@ -56,7 +56,7 @@ resource "helm_release" "rustfs" {
         memory = "1Gi"
       }
       limits = {
-        memory = "1Gi"
+        memory = "2Gi"
       }
     }
     # Traefik routes the host to port 9001, which serves the console at
