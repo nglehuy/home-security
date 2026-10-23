@@ -38,6 +38,11 @@ run "chart" {
   }
 
   assert {
+    condition     = yamldecode(helm_release.rustfs.values[0]).resources == { requests = { cpu = "100m", memory = "1Gi" }, limits = { memory = "1Gi" } }
+    error_message = "RustFS must get 1 GiB. With 512 MiB, its idle process memory was 360 MiB, and the kernel stopped it about every 3 hours."
+  }
+
+  assert {
     condition = yamldecode(helm_release.rustfs.values[0]).ingress == {
       enabled   = true
       className = "traefik"

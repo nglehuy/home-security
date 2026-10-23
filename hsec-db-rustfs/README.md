@@ -84,7 +84,7 @@ The chart `rustfs` 1.0.1 defaults to a distributed cluster with 4 pods. This mod
 | `storageclass.dataStorageSize` | `400Gi` | Data volume |
 | `storageclass.logStorageSize` | `1Gi` | Log volume |
 | `secret.existingSecret` | `rustfs-root` | Keys from Terraform, not chart defaults |
-| `resources` | 512 MiB, CPU request 0.1 | Memory budget |
+| `resources` | 1 GiB, CPU request 0.1 | With 512 MiB, the idle process memory was 360 MiB, and the kernel stopped RustFS for OOM about every 3 hours. |
 | `ingress` | Class `traefik`, host `ingress_host` to the port `console`, no TLS | Traefik serves the console. The S3 port 9000 stays inside the cluster. |
 
 ## Kubernetes objects

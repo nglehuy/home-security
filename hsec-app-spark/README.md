@@ -26,7 +26,7 @@ flowchart TB
 | Driver | The process that runs `main`, builds the plan, and sends tasks to the executors [3]. |
 | Executor | A process that runs tasks and keeps cached data. |
 | Cluster manager | The system that starts the executors. Here it is Kubernetes: the driver creates the executor pods itself [4]. |
-| SparkSession | The entry point of a program. It holds the settings and the catalogs. |
+| SparkSession | The entry point of a program. It holds the configuration and the catalogs. |
 | DataFrame | A table of rows with a schema, spread over the cluster in partitions. |
 | Transformation and action | A transformation, such as `filter` or `groupBy`, only adds a step to the plan. An action, such as a write or a count, runs the plan. This is lazy evaluation [1]. |
 | Partition and task | A partition is one slice of a DataFrame. One task handles one partition in one step. |
@@ -71,7 +71,7 @@ flowchart TB
 
 | Part | Role |
 | --- | --- |
-| SparkSession | Holds the settings and the catalogs of the run. |
+| SparkSession | Holds the configuration and the catalogs of the run. |
 | Catalyst | Turns the DataFrame steps into a physical plan. It pushes the column list and the filters down to the readers [2]. |
 | DAG scheduler | Turns a job into a graph of stages. Steps without a shuffle between them run in the same stage, one after the other on each partition [1]. |
 | Task scheduler | Sends the tasks of each stage to the executors, and sends a failed task again. |
@@ -160,7 +160,7 @@ For each of the 7 Iceberg tables, in this order:
 1. Delete the rows with `event_ts` before UTC midnight 27 days ago. The filter matches whole daily partitions, so Iceberg deletes them without a rewrite.
 2. Compact the small files with `rewrite_data_files` and the `sort` strategy. The job skips `alerts`, because a rewrite loads its clips into the 1 GiB executor.
 3. Expire the snapshots older than 1 day, and keep the last one.
-4. Remove the orphan files older than 1 day.
+4. Remove the orphan files older than 1 day. The call sets `prefix_listing => true`, so Iceberg lists the files through `S3FileIO`. The default lists through the Hadoop file system, which has no `s3` scheme in the image [7].
 5. Rewrite the manifests.
 
 So the tables keep the current UTC day plus the 27 days before, and no data file is older than 30 days. Snapshots stay for 1 day, so a restarted Flink job still finds its last commit.
@@ -204,7 +204,7 @@ hsec-app-spark/
 ├── .dockerignore
 ├── src/main/java/hsec/batch/
 │   ├── BatchJob.java                # main: maintenance, reads, transforms, writes
-│   ├── BatchConfig.java             # arguments, passwords, and catalog settings
+│   ├── BatchConfig.java             # arguments, passwords, and catalog configuration
 │   ├── Schedule.java                # window start, maintenance time, retention, night
 │   ├── Transforms.java              # the five ClickHouse tables
 │   └── Maintenance.java             # the nightly Iceberg statements
@@ -275,3 +275,5 @@ See [Spark](../docs/specs.md#spark) and [Retention and maintenance](../docs/spec
 [5] Kubeflow, "Spark Operator: Overview," Kubeflow Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://www.kubeflow.org/docs/components/spark-operator/overview/
 
 [6] Apache Spark, "Spark Configuration," Spark 4.0.0 Documentation. Accessed: Oct. 5, 2026. [Online]. Available: https://spark.apache.org/docs/4.0.0/configuration.html
+
+[7] Apache Iceberg, "`RemoveOrphanFilesProcedure.java`," GitHub, release 1.12.0. Accessed: Oct. 23, 2026. [Online]. Available: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/spark/v4.0/spark/src/main/java/org/apache/iceberg/spark/procedures/RemoveOrphanFilesProcedure.java

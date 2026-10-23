@@ -48,13 +48,15 @@ resource "helm_release" "rustfs" {
     secret = {
       existingSecret = var.root_secret_name
     }
+    # With 512 MiB, the idle process memory was 360 MiB, and the kernel
+    # stopped RustFS for OOM about every 3 hours.
     resources = {
       requests = {
         cpu    = "100m"
-        memory = "512Mi"
+        memory = "1Gi"
       }
       limits = {
-        memory = "512Mi"
+        memory = "1Gi"
       }
     }
     # Traefik routes the host to port 9001, which serves the console at

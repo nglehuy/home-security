@@ -1074,7 +1074,7 @@ The first Spark run at or after 03:00 local time does these steps for each table
 1. Delete rows with `event_ts` before UTC midnight 27 days ago. The filter matches whole day partitions, so Iceberg deletes them without a rewrite [19].
 2. Compact the small files: `CALL lake.system.rewrite_data_files(table => 'hsec.<table>', strategy => 'sort')` [20]. Skip `alerts`. It has only a few files per day, and a rewrite loads the clips into the 1 GiB Spark executor.
 3. Expire old snapshots: `CALL lake.system.expire_snapshots(table => 'hsec.<table>', older_than => <now minus 1 day>, retain_last => 1)`.
-4. Remove orphan files: `CALL lake.system.remove_orphan_files(table => 'hsec.<table>', older_than => <now minus 1 day>)`.
+4. Remove orphan files: `CALL lake.system.remove_orphan_files(table => 'hsec.<table>', older_than => <now minus 1 day>, prefix_listing => true)`. By default, the procedure lists the files through the Hadoop file system. The image has no Hadoop file system for `s3`, so it fails with `No FileSystem for scheme "s3"`. With `prefix_listing => true`, it lists through `S3FileIO` [51].
 5. Rewrite manifests: `CALL lake.system.rewrite_manifests('hsec.<table>')`.
 
 Retention math:
@@ -1101,7 +1101,7 @@ Folder: `hsec-db-rustfs`.
 | `storageclass.dataStorageSize` | `400Gi` |
 | `storageclass.logStorageSize` | `1Gi` |
 | `secret.existingSecret` | `rustfs-root`, with the key names that the chart expects |
-| `resources` | memory 512 MiB, CPU request 0.1 |
+| `resources` | memory 1 GiB, CPU request 0.1. With 512 MiB, the idle process memory was 360 MiB, and the kernel stopped RustFS for OOM about every 3 hours. |
 | `ingress` | Class `traefik`, host `rustfs.<domain>` to the port `console`, no TLS. See [Web UIs](#web-uis). |
 
 The Service is `rustfs-svc`, with the S3 API on port 9000 and the console on port 9001. Port 9001 serves the console at `/rustfs/console/`. The console calls the admin API and the S3 API on its own host and port. So the Ingress needs only port 9001, and port 9000 stays inside the cluster.
@@ -1690,3 +1690,5 @@ Each app folder and each root in `terraform/` has a `README.md`. Each `<app>/ter
 [49] P. Pfister and T. Lemon, "Special-Use Domain 'home.arpa.'," RFC 8375, 2018, doi: 10.17487/RFC8375. [Online]. Available: https://www.rfc-editor.org/rfc/rfc8375
 
 [50] S. Cheshire and M. Krochmal, "Multicast DNS," RFC 6762, Feb. 2013, doi: 10.17487/RFC6762. [Online]. Available: https://www.rfc-editor.org/rfc/rfc6762
+
+[51] Apache Iceberg, "`RemoveOrphanFilesProcedure.java`," GitHub, release 1.12.0. Accessed: Oct. 23, 2026. [Online]. Available: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/spark/v4.0/spark/src/main/java/org/apache/iceberg/spark/procedures/RemoveOrphanFilesProcedure.java

@@ -244,15 +244,15 @@ All values are starting values. Measure them with `kubectl top pod` after one we
 | `hsec-conn-mqtt` | Redpanda Connect bridge | 128 MiB | 0.05 | Always |
 | `hsec-db-clickhouse` | ClickHouse | 1.5 GiB | 0.25 | Always |
 | `hsec-db-iceberg` | Postgres | 512 MiB | 0.1 | Always |
-| `hsec-db-rustfs` | RustFS | 512 MiB | 0.1 | Always |
+| `hsec-db-rustfs` | RustFS | 1 GiB | 0.1 | Always |
 | `hsec-q-mqtt` | Mosquitto | 64 MiB | 0.05 | Always |
 | `hsec-q-redpanda` | Redpanda | 2.5 GiB | 1 | Always |
 
 Totals:
 
-- All day: about 11.4 GiB of memory and 3.55 CPU.
-- While Spark runs: about 13.4 GiB of memory and 4.3 CPU.
-- The machine has 23.3 GiB. Today, Fedora, the desktop, k3s, and the pods that run now use 3.2 GiB. With the 13.4 GiB peak of this project, about 6.7 GiB stays free.
+- All day: about 11.9 GiB of memory and 3.55 CPU.
+- While Spark runs: about 13.9 GiB of memory and 4.3 CPU.
+- The machine has 23.3 GiB. Today, Fedora, the desktop, k3s, and the pods that run now use 3.2 GiB. With the 13.9 GiB peak of this project, about 6.2 GiB stays free.
 - A clip part is at most 19 MiB. The Flink TaskManager and the notifier each hold a few copies of one part in memory, so they get extra memory. Flink downloads at most 2 clip parts at a time.
 
 ## Storage budget

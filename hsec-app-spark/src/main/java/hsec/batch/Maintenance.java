@@ -33,7 +33,10 @@ public final class Maintenance {
             }
             out.add("CALL lake.system.expire_snapshots(table => '" + name + "', older_than => " + older
                     + ", retain_last => 1)");
-            out.add("CALL lake.system.remove_orphan_files(table => '" + name + "', older_than => " + older + ")");
+            // prefix_listing lists through S3FileIO. The default lists through the
+            // Hadoop file system, which has no "s3" scheme in the image.
+            out.add("CALL lake.system.remove_orphan_files(table => '" + name + "', older_than => " + older
+                    + ", prefix_listing => true)");
             out.add("CALL lake.system.rewrite_manifests('" + name + "')");
         }
         return out;

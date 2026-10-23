@@ -25,7 +25,15 @@ class MaintenanceTest {
         assertThat(SQL).contains("CALL lake.system.expire_snapshots(table => 'hsec.visits', older_than => "
                 + "TIMESTAMP '2026-10-03 19:05:00 UTC', retain_last => 1)");
         assertThat(SQL).contains("CALL lake.system.remove_orphan_files(table => 'hsec.alerts', older_than => "
-                + "TIMESTAMP '2026-10-03 19:05:00 UTC')");
+                + "TIMESTAMP '2026-10-03 19:05:00 UTC', prefix_listing => true)");
+    }
+
+    @Test
+    void listsOrphanFilesThroughTheTableFileIo() {
+        // Without prefix_listing, Iceberg lists through the Hadoop file system,
+        // which has no "s3" scheme in the image.
+        List<String> orphans = SQL.stream().filter(s -> s.contains("remove_orphan_files")).toList();
+        assertThat(orphans).hasSize(7).allMatch(s -> s.endsWith(", prefix_listing => true)"));
     }
 
     @Test
